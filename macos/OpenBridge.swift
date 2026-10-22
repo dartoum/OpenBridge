@@ -460,6 +460,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
         guard let data = result as? Data else { return nil }; return String(data: data, encoding: .utf8)
     }
+    nonisolated func deleteProviderKey(_ provider: String) { SecItemDelete(keyQuery(provider) as CFDictionary) }
+    // Only providers the person added can be removed; the built-in ones can be switched off.
+    func removeProvider(_ id: String) {
+        updateConfig({ $0.providers.removeAll { $0.id == id } }, onSuccess: {
+            self.requestedSelection = "overview"
+            Task.detached { self.deleteProviderKey(id) }
+        })
+    }
     nonisolated func storeProviderKey(_ provider: String, _ key: String) -> Bool {
         let value = [kSecValueData as String: Data(key.trimmingCharacters(in: .whitespacesAndNewlines).utf8)]
         var code = SecItemUpdate(keyQuery(provider) as CFDictionary, value as CFDictionary)

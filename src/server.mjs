@@ -143,6 +143,8 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
       const changed = new Set(config.providers.filter(p => JSON.stringify(p) !== JSON.stringify(next.providers.find(n => n.id === p.id))).map(p => p.id));
       persist(next);
       checks = Object.fromEntries(Object.entries(checks).filter(([id]) => !changed.has(id.split('/')[0])));
+      // A removed provider takes its key out of memory too.
+      for (const id of Object.keys(secrets)) if (!next.providers.some(p => p.id === id)) delete secrets[id];
       return { saved:true };
     },
     'POST /bridge/diagnostics': async () => (cachedDiagnostics = await diagnostics(config, secrets)),

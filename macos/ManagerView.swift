@@ -251,6 +251,7 @@ struct ProviderDetail: View {
     @State private var updatingCLI = false
     @State private var showAdvanced = false
     @State private var changingKey = false
+    @State private var confirmingRemoval = false
     @State private var showOlder = false
     @State private var search = ""
     @State private var newName = ""
@@ -405,9 +406,18 @@ struct ProviderDetail: View {
                         }
                     }
                 }
+                if provider.id.hasPrefix("provider-") {
+                    Section {
+                        Button("Remove provider…", role: .destructive) { confirmingRemoval = true }.disabled(!editable)
+                    }
+                }
             }
         }
         .formStyle(.grouped)
+        .alert("Remove \(provider.name)?", isPresented: $confirmingRemoval) {
+            Button("Remove", role: .destructive) { app.removeProvider(provider.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Its models disappear from the API and its key is deleted from your Keychain. This can’t be undone.") }
         .onChange(of: focus) { previous, _ in if let previous, previous != .secret { commit(previous) } }
         .onChange(of: provider) { _, new in
             if focus != .name { name = new.name }

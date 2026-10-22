@@ -72,3 +72,19 @@ test('a provider may list up to 1000 models', () => {
   config.providers[3].models.push(...many(5).map((m,i)=>({...m,id:`commandcode/x${i}`,upstreamModel:`x${i}`})));
   assert.throws(()=>validateConfig(config),/Invalid provider/);
 });
+
+test('removing a provider drops its configuration, models, check results and key from the server', async t=>{
+  const config=defaultConfig();
+  config.providers.push({id:'provider-aaaa',name:'Gone soon',type:'openai',enabled:true,cliPath:'',baseURL:'http://127.0.0.1:9/v1',models:[{id:'provider-aaaa/m',name:'M',upstreamModel:'m',enabled:true}]});
+  const server=createBridge({key:'test',config});
+  await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>server.close());
+  const base=`http://127.0.0.1:${server.address().port}`,headers={Authorization:'Bearer test','Content-Type':'application/json'};
+  assert.equal((await fetch(base+'/bridge/credentials',{method:'POST',headers,body:JSON.stringify({providerID:'provider-aaaa',key:'fixture-secret'})})).status,200);
+  assert.equal((await(await fetch(base+'/bridge/status',{headers})).json()).credentialProviders.includes('provider-aaaa'),true);
+  const next=structuredClone(config);next.providers=next.providers.filter(p=>p.id!=='provider-aaaa');
+  assert.equal((await fetch(base+'/bridge/config',{method:'PUT',headers,body:JSON.stringify(next)})).status,200);
+  const status=await(await fetch(base+'/bridge/status',{headers})).json();
+  assert.equal(status.credentialProviders.includes('provider-aaaa'),false);
+  assert.equal(status.config.providers.some(p=>p.id==='provider-aaaa'),false);
+  assert.equal((await(await fetch(base+'/v1/models',{headers})).json()).data.some(m=>m.id.startsWith('provider-aaaa/')),false);
+});
