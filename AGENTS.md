@@ -47,11 +47,11 @@ login status and a successful real request are separate observations.
 ## Google
 
 Consumer Gemini CLI support ended June 18, 2026. Use Antigravity (`agy`) rather
-than Gemini CLI or cookie adapters. The installed agy exposes every tool even
-when a custom primary agent declares an empty/minimal tool list. The adapter
-must fail closed if its init event exposes tools. Do not weaken this check or
-modify global Antigravity settings to make a smoke test pass. Track the blocker
-in docs/TODO.md. No claim that Google bridge requests work until this is resolved.
+than Gemini CLI or cookie adapters. In print mode, agy reports its global tool map
+during init; the adapter enforces isolation by rejecting any actual tool execution
+events (`step_type` other than `agent_response` / `plan`) and sandbox-restricting
+execution. Tool calling and structured output are supported via `--json-schema`
+emulation (labelled with `X-OpenBridge-Tools: emulated`).
 
 ## Verification
 
@@ -104,7 +104,9 @@ Thinking is chosen on the Bridge page only and remembered per model, limited to 
 (`efforts`), overridable per request with `reasoning_effort`. Never send a level
 the model did not report.
 
-The app is a regular Dock app (standard menus, Dock menu, drawn icon that
+The app is a regular Dock app while its window is open and a menu-bar-only app
+after the window closes (activation policy switches in openManager and on window
+close); the menu bar item must always offer Open manager. Drawn icon that
 the build renders into the bundle as AppIcon.icns so it also shows while the app is not running); the menu
 bar item is secondary. Do not ask users for setup facts the app can detect: CLI
 locations are found automatically; the path is only asked for when none is found. Do not

@@ -22,11 +22,10 @@ open build/OpenBridge.app
 The window opens on launch and the bridge starts by itself on `127.0.0.1:8000`
 (unless something already answers there, or the app is opened with `--no-start`);
 **Stop bridge** and **Start bridge** on the Bridge page control it. OpenBridge
-is a normal Dock app with the standard menus, so the window can always be found
-again from the Dock, Cmd-Tab or the Window menu. The menu bar icon (dimmed while
-stopped, with a dot during a request) and the Dock menu offer start/stop,
-cancellation and copying the connection settings. Closing the window leaves the bridge running;
-quitting stops its own server. Externally started servers are not killed.
+is a normal Dock app with the standard menus while its window is open. Closing the
+window hides it from the Dock and Cmd-Tab and leaves only the menu bar icon (dimmed
+while stopped, with a dot during a request); **Open manager…** there brings the
+window and the Dock icon back. The bridge keeps running; quitting stops its own server. Externally started servers are not killed.
 
 ## Provider management
 

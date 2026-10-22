@@ -168,7 +168,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             win.isReleasedWhenClosed = false
             win.center(); window = win
+            // Closing the window leaves only the menu bar item; the Dock icon returns when the window opens again.
+            NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: win, queue: .main) { _ in
+                Task { @MainActor in NSApp.setActivationPolicy(.accessory) }
+            }
         }
+        NSApp.setActivationPolicy(.regular)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -528,6 +533,6 @@ struct OpenBridgeMain {
             return
         }
         let app = NSApplication.shared; let delegate = AppDelegate(); app.delegate = delegate
-        app.setActivationPolicy(.regular); withExtendedLifetime(delegate) { app.run() }
+        app.setActivationPolicy(CommandLine.arguments.contains("--background") ? .accessory : .regular); withExtendedLifetime(delegate) { app.run() }
     }
 }
