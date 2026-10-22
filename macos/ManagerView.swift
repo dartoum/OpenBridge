@@ -155,13 +155,17 @@ struct Overview: View {
     var body: some View {
         Form {
             Section {
-                HStack {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(app.message).font(.title2.bold())
-                    }
+                HStack(spacing: 10) {
+                    Circle().fill(app.statusColor).frame(width: 10, height: 10).accessibilityHidden(true)
+                    Text(app.message).font(.title2.bold()).foregroundStyle(app.statusColor)
                     Spacer()
-                    Button(app.child == nil && app.snapshot == nil ? "Start bridge" : "Stop bridge") { app.child == nil && app.snapshot == nil ? app.start() : app.stop() }
+                    // On while the bridge runs or is starting; an external server is not ours to stop.
+                    Toggle("Bridge", isOn: Binding(
+                        get: { (app.child != nil || app.snapshot != nil) && app.message != "Stopping…" },
+                        set: { $0 ? app.start() : app.stop() }))
+                        .labelsHidden().toggleStyle(.switch)
                         .disabled(app.maintenanceRunning || (app.child == nil && app.snapshot != nil))
+                        .help(app.child == nil && app.snapshot != nil ? "This bridge was started outside the app" : "Turn the bridge on or off")
                 }
                 if let snapshot = app.snapshot, snapshot.active {
                     HStack { ProgressView().controlSize(.small); Text("Running \(snapshot.activeModel ?? "request")"); Spacer(); Button("Cancel") { app.cancel() } }

@@ -49,6 +49,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             ProviderRecord(id: "google", name: "Antigravity", type: "antigravity", enabled: true, cliPath: NSHomeDirectory() + "/.local/bin/agy", baseURL: "", models: [])
         ]
     }
+    // Green while the bridge answers, orange while it changes state or is paused, red after a failure.
+    var statusColor: Color {
+        if snapshot != nil { return snapshot?.maintenance == true ? .orange : .green }
+        if child != nil { return .orange }
+        return message.contains("fail") || message.contains("unexpectedly") ? .red : .secondary
+    }
     var timer: Timer?
     var polling = false
     var pendingWrites = 0
