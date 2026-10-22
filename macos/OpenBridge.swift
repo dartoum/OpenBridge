@@ -81,51 +81,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             storedProviders = (try? JSONDecoder().decode(BridgeConfiguration.self, from: data))?.providers
         }
     }
-    // Two bridge piers, a deck and a single arch; a dot marks an active request.
-    func bridgePath(busy: Bool) -> NSBezierPath {
-        let path = NSBezierPath()
-        path.lineWidth = 1.6
-        path.lineCapStyle = .round
-        path.lineJoinStyle = .round
-        path.move(to: NSPoint(x: 1.5, y: 7.5))
-        path.line(to: NSPoint(x: 16.5, y: 7.5))
-        for x in [CGFloat(4), CGFloat(14)] {
-            path.move(to: NSPoint(x: x, y: 3.5))
-            path.line(to: NSPoint(x: x, y: busy && x == 14 ? 10.5 : 13.5))
-        }
-        path.move(to: NSPoint(x: 4, y: 8))
-        path.curve(to: NSPoint(x: 14, y: 8), controlPoint1: NSPoint(x: 6, y: 15), controlPoint2: NSPoint(x: 12, y: 15))
-        return path
-    }
-    func bridgeIcon(busy: Bool) -> NSImage {
-        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
-            NSColor.black.setStroke()
-            self.bridgePath(busy: busy).stroke()
-            if busy {
-                NSColor.black.setFill()
-                NSBezierPath(ovalIn: NSRect(x: 12.5, y: 12.5, width: 5, height: 5)).fill()
-            }
-            return true
-        }
-        image.isTemplate = true
-        return image
-    }
-    // Dock icon: the same glyph on a rounded square, following the macOS icon grid (824 pt body in a 1024 pt canvas).
-    func appIcon() -> NSImage {
-        NSImage(size: NSSize(width: 1024, height: 1024), flipped: false) { _ in
-            let body = NSBezierPath(roundedRect: NSRect(x: 100, y: 100, width: 824, height: 824), xRadius: 185, yRadius: 185)
-            NSGradient(starting: NSColor(calibratedRed: 0.20, green: 0.45, blue: 0.95, alpha: 1), ending: NSColor(calibratedRed: 0.08, green: 0.20, blue: 0.55, alpha: 1))?.draw(in: body, angle: -90)
-            let scale: CGFloat = 36
-            let glyph = self.bridgePath(busy: false)
-            var placement = AffineTransform(scale: scale)
-            placement.append(AffineTransform(translationByX: 512 - 9 * scale, byY: 512 - 9 * scale + 10))
-            glyph.transform(using: placement)
-            glyph.lineWidth = 1.6 * scale
-            NSColor.white.setStroke()
-            glyph.stroke()
-            return true
-        }
-    }
     func buildMainMenu() {
         let mainMenu = NSMenu()
         let applicationItem = NSMenuItem(); let applicationMenu = NSMenu()
@@ -549,6 +504,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 @main
 struct OpenBridgeMain {
     @MainActor static func main() {
+        // Build step: write the app icon as PNGs for iconutil, then exit without starting the app.
+        if let flag = CommandLine.arguments.firstIndex(of: "--render-icon"), CommandLine.arguments.indices.contains(flag + 1) {
+            _ = NSApplication.shared
+            do { try renderAppIconSet(to: URL(fileURLWithPath: CommandLine.arguments[flag + 1])) } catch { print(error.localizedDescription); exit(1) }
+            return
+        }
         let app = NSApplication.shared; let delegate = AppDelegate(); app.delegate = delegate
         app.setActivationPolicy(.regular); withExtendedLifetime(delegate) { app.run() }
     }

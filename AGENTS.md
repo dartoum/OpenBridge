@@ -102,7 +102,8 @@ Thinking is chosen on the Bridge page only and remembered per model, limited to 
 (`efforts`), overridable per request with `reasoning_effort`. Never send a level
 the model did not report.
 
-The app is a regular Dock app (standard menus, Dock menu, drawn icon); the menu
+The app is a regular Dock app (standard menus, Dock menu, drawn icon that
+the build renders into the bundle as AppIcon.icns so it also shows while the app is not running); the menu
 bar item is secondary. Do not ask users for setup facts the app can detect: CLI
 locations are found automatically; the path is only asked for when none is found. Do not
 add refresh buttons for checks that run on page open, app activation and after
