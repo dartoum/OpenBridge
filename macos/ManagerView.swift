@@ -175,6 +175,21 @@ struct Overview: View {
                     Button("Resume requests") { app.resumeBridgeAfterMaintenance() }
                 }
             }
+            Section("Connect from another app") {
+                LabeledContent("API type", value: "OpenAI Chat Completions")
+                LabeledContent("Base URL") { Text(app.endpoint + "/v1").textSelection(.enabled); CopyButton(title: "Copy") { app.copyURL() } }
+                LabeledContent("API key") { Text("Local bridge key").foregroundStyle(.secondary); CopyButton(title: "Copy") { app.copyKey() }.disabled(app.bridgeKey == nil) }
+                LabeledContent("All settings") { CopyButton(title: "Copy connection settings") { app.copyConfig() }.disabled(app.snapshot == nil) }
+Text("For apps on this Mac. Claude supports function calling (emulated), JSON output and thinking levels. ChatGPT and Google answer plain text only. Length and sampling options such as max_tokens are ignored on subscription models. For real function calling, use an API provider.").font(secondaryFont).foregroundStyle(.secondary)
+
+            }
+            if let snapshot = app.snapshot {
+                Section("Requests since server start") {
+                    LabeledContent("Succeeded", value: String(snapshot.succeeded))
+                    LabeledContent("Failed or cancelled", value: String(snapshot.failed))
+                    if let ms = snapshot.lastDurationMs { LabeledContent("Last request", value: String(format: "%.1f s", Double(ms)/1000)) }
+                }
+            }
             if let snapshot = app.snapshot {
                 Section("Models available to apps") {
                     Text("One endpoint for every model that is switched on. An app picks a model by its ID. Thinking applies to every request for a model; an app can override it with reasoning_effort.").font(secondaryFont).foregroundStyle(.secondary)
@@ -195,14 +210,6 @@ struct Overview: View {
                     }
                 }
             }
-            Section("Connect from another app") {
-                LabeledContent("API type", value: "OpenAI Chat Completions")
-                LabeledContent("Base URL") { Text(app.endpoint + "/v1").textSelection(.enabled); CopyButton(title: "Copy") { app.copyURL() } }
-                LabeledContent("API key") { Text("Local bridge key").foregroundStyle(.secondary); CopyButton(title: "Copy") { app.copyKey() }.disabled(app.bridgeKey == nil) }
-                LabeledContent("All settings") { CopyButton(title: "Copy connection settings") { app.copyConfig() }.disabled(app.snapshot == nil) }
-Text("For apps on this Mac. Claude supports function calling (emulated), JSON output and thinking levels. ChatGPT and Google answer plain text only. Length and sampling options such as max_tokens are ignored on subscription models. For real function calling, use an API provider.").font(secondaryFont).foregroundStyle(.secondary)
-
-            }
             Section("Installation") {
                 LabeledContent("Node.js", value: app.snapshot?.runtime.version ?? (FileManager.default.isExecutableFile(atPath: app.node) ? "Bundled" : "Missing"))
                 ForEach(app.providers) { provider in
@@ -216,13 +223,6 @@ Text("For apps on this Mac. Claude supports function calling (emulated), JSON ou
                             if let status, status.installed { Text(status.auth).font(secondaryFont).foregroundStyle(.secondary) }
                         }
                     }
-                }
-            }
-            if let snapshot = app.snapshot {
-                Section("Requests since server start") {
-                    LabeledContent("Succeeded", value: String(snapshot.succeeded))
-                    LabeledContent("Failed or cancelled", value: String(snapshot.failed))
-                    if let ms = snapshot.lastDurationMs { LabeledContent("Last request", value: String(format: "%.1f s", Double(ms)/1000)) }
                 }
             }
         }.formStyle(.grouped)
