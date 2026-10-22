@@ -105,6 +105,7 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
   if (!key || !adminKey) throw Error('Bridge and management keys required');
   let config=validateConfig(structuredClone(suppliedConfig || loadConfig(configPath)));
   if(model) config.selectedModel=resolveConfiguredModel(config,model)?.id || config.selectedModel;
+  let maintenance=false;
   let active=false, activeModel=null, currentController, checks={}, cachedDiagnostics=[];
   const secrets={};
   if(process.env.COMMAND_CODE_API_KEY) secrets.commandcode=process.env.COMMAND_CODE_API_KEY;
@@ -118,7 +119,14 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
     const given=Buffer.from(req.headers.authorization||''),expected=Buffer.from(`Bearer ${requiredKey}`);
     if(given.length!==expected.length||!timingSafeEqual(given,expected)) return error(401,'Invalid bridge key');
     try {
-      if(req.url==='/bridge/status'&&req.method==='GET') return json(200,{service:'openbridge',version:6,model:config.selectedModel,selectedModelID:config.selectedModel,activeModel,active,models:catalog(config),config,diagnostics:cachedDiagnostics,checks,runtime:{version:process.version,path:process.execPath},credentialProviders:Object.keys(secrets),...stats});
+      if(req.url==='/bridge/status'&&req.method==='GET') return json(200,{service:'openbridge',version:6,model:config.selectedModel,selectedModelID:config.selectedModel,activeModel,active,maintenance,models:catalog(config),config,diagnostics:cachedDiagnostics,checks,runtime:{version:process.version,path:process.execPath},credentialProviders:Object.keys(secrets),...stats});
+      if(req.url==='/bridge/maintenance'&&req.method==='POST') {
+        const body=await readJSON(req,4096);
+        if(typeof body.enabled!=='boolean') return error(400,'enabled must be boolean');
+        if(body.enabled&&maintenance) return error(409,'CLI maintenance is already in progress');
+        if(body.enabled&&active) return error(409,'Wait for the active request before updating a CLI');
+        maintenance=body.enabled;return json(200,{maintenance});
+      }
       if(req.url==='/bridge/config'&&req.method==='PUT') {
         const next=validateConfig(await readJSON(req));
         const changed=new Set(config.providers.filter(p=>JSON.stringify(p)!==JSON.stringify(next.providers.find(n=>n.id===p.id))).map(p=>p.id));
@@ -146,9 +154,11 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
       if(req.url==='/bridge/cancel'&&req.method==='POST') {currentController?.abort();return json(200,{cancelled:active});}
       if(req.url==='/v1/models'&&req.method==='GET') return json(200,{object:'list',data:catalog(config).filter(m=>m.enabled).map(m=>({id:m.id,object:'model',created:0,owned_by:m.providerID}))});
       if(req.url!=='/v1/chat/completions'||req.method!=='POST') return error(404,'Not found');
+      if(maintenance) return error(503,'CLI maintenance in progress; retry when it finishes');
       if(active) return error(429,'Bridge busy; retry after the current request');
       let body;
       try{body=validate(await readJSON(req));}catch(e){return error(e.status||400,e.message);}
+      if(maintenance) return error(503,'CLI maintenance in progress; retry when it finishes');
       if(active) return error(429,'Bridge busy; retry later');
       const selected=resolveConfiguredModel(config,body.model);
       if(!selected) return error(400,'Model unknown or disabled');

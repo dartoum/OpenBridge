@@ -74,3 +74,18 @@ Codex uses its CLI catalogue; API providers use their own /models. Preserve
 existing enabled flags and names, add new IDs disabled, and expose source and
 alias resolution. Public/catalogue presence is not account access. CLI init
 model metadata is the source of served-model identity, not model self-report.
+
+Provider save actions belong in a pinned bottom bar outside the scrolling form.
+Show saved/unsaved state and retain entered secrets on failed saves.
+
+Tools is update-only: never install missing CLIs or swap installation methods.
+Native self-updaters, recognized Homebrew casks and matched-prefix npm updates
+are supported; unknown/custom layouts point to official instructions. Preview
+commands before the user starts them. Execute fixed programs/argument arrays;
+never interpolate provider paths into shell commands. No sudo or billing fallback.
+Only the native app executes updaters; management HTTP routes only pause/resume
+inference. Maintenance requires admin auth, refuses active requests/overlap and
+returns 503 for new inference until released. Keep failure output bounded and
+resume after failures. A manual resume control handles interrupted maintenance.
+Run scripts/check-native.sh for method routing and process-output fixtures;
+report these separately from actual vendor updates or clean-Mac acceptance.

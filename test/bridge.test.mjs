@@ -106,3 +106,20 @@ test('provider routing and Command Code settings require auth and never expose k
   assert.equal((await post('/bridge/credentials',{providerID:'unknown',key:'fixture-secret'})).status,400);
   assert.equal((await fetch(base+'/bridge/credentials',{method:'POST',body:'{}'})).status,401);
 });
+
+test('CLI maintenance requires admin access, blocks inference and cannot interrupt an active request', async t => {
+ let complete;let started;const ready=new Promise(r=>started=r);
+ const server=createBridge({key:'client',adminKey:'admin',runner:async()=>{started();return new Promise(r=>complete=r);}});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>server.close());
+ const base=`http://127.0.0.1:${server.address().port}`;
+ const headers=key=>({Authorization:'Bearer '+key,'Content-Type':'application/json'});
+ const lock=(enabled,key='admin')=>fetch(base+'/bridge/maintenance',{method:'POST',headers:headers(key),body:JSON.stringify({enabled})});
+ const post=()=>fetch(base+'/v1/chat/completions',{method:'POST',headers:headers('client'),body:JSON.stringify({model:'claude/haiku',messages:[{role:'user',content:'hello'}]})});
+ assert.equal((await lock(true,'client')).status,401);
+ assert.equal((await lock(true)).status,200);assert.equal((await lock(true)).status,409);assert.equal((await post()).status,503);
+ assert.equal((await(await fetch(base+'/bridge/status',{headers:headers('admin')})).json()).maintenance,true);
+ assert.equal((await lock(false)).status,200);
+ const pending=post();await ready;assert.equal((await lock(true)).status,409);
+ complete('ok');assert.equal((await pending).status,200);
+ assert.equal((await lock(true)).status,200);assert.equal((await lock(false)).status,200);
+});

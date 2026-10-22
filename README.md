@@ -167,3 +167,36 @@ On this Mac, Claude 2.1.286’s catalogue resolves `haiku` to
 `claude-haiku-5-5` and a JSON schema succeeded and its init metadata identified
 Haiku 5.5. Successful CLI checks now show the served-model metadata. This is
 machine/account-specific evidence, not a claim about every subscription.
+
+## Pinned save actions and CLI updates
+
+Provider pages keep **Save changes** in a fixed bottom bar while the settings and
+model list scroll. The bar shows saved/unsaved state; failed saves retain an
+entered key so you can retry.
+
+**Tools** shows configured CLI paths, installation status and last checked version.
+**Update CLI…** previews the detected method and exact command before running:
+recognized native installs use `claude update`, `codex update` or `agy update`;
+recognized Homebrew casks use their own brew; npm updates target the matching
+existing prefix. Unknown/custom installations show instructions instead of
+being replaced. Missing tools are installed outside OpenBridge using official
+instructions, then selected on their provider page. There are no install actions.
+
+Updates run in the app, without sudo, retaining at most 64 KiB of combined output.
+A separate management lock refuses an update while a request is active and
+pauses new inference with HTTP 503. The app resumes requests afterward, including
+on update failures, and refreshes installation/version checks. **Resume bridge**
+on Tools recovers a pause left by interrupted maintenance. Model choices and
+account login configuration are retained. After an update use **Fetch models**;
+newer binaries can add support, but aliases and account entitlements can still
+lag. An update button does not claim a newer release is available.
+
+```sh
+scripts/check-native.sh
+```
+
+Native fixtures verify native/Homebrew/npm routing, missing/unknown installation
+refusal, path handling, process failures and bounded output. Together with 20
+Node tests, these validate the implementation without downloading or updating
+installed third-party software. Live vendor updates and clean-Mac installation
+remain separate acceptance steps.

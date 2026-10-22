@@ -10,7 +10,7 @@ export async function diagnostics(config, secrets) {
     if(!result.installed) {result.detail='CLI is missing or not executable';return result;}
     if(p.type==='openai') {result.auth=secrets[p.id]?'API key configured':p.id==='commandcode'?'API key missing':'No API key (may not be required)';result.detail='A test request confirms access and model availability';return result;}
     try {
-      if(p.type!=='antigravity') result.version=(await execute(p.cliPath,['--version'],{timeout:5000,maxBuffer:16384})).stdout.trim().slice(0,100);
+      result.version=(await execute(p.cliPath,['--version'],{timeout:5000,maxBuffer:16384})).stdout.trim().slice(0,100);
       if(p.type==='claude') { const info=JSON.parse((await execute(p.cliPath,['auth','status'],{timeout:7000,maxBuffer:16384})).stdout); result.auth=info.loggedIn && info.authMethod==='claude.ai'?'Subscription login confirmed':info.loggedIn?'Different login; check subscription':'Not signed in'; }
       if(p.type==='codex') {const info=await execute(p.cliPath,['login','status'],{timeout:7000,maxBuffer:16384});result.auth=/ChatGPT/i.test(info.stdout+info.stderr)?'ChatGPT login confirmed':'No confirmed ChatGPT login';}
       if(p.type==='antigravity') result.detail='Antigravity CLI found. Text-only isolation is currently blocked; model discovery does not confirm inference access.';

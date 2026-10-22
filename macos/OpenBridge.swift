@@ -14,6 +14,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var saving = false
     @Published var discovering = false
     @Published var testingModel: String?
+    @Published var maintenanceRunning = false
+    @Published var maintenanceOutput = ""
+    @Published var maintenanceSucceeded = false
+    var configuredProviders: [ProviderRecord] {
+        snapshot?.config.providers ?? storedConfiguration?.providers ?? [
+            ProviderRecord(id: "claude", name: "Claude Pro", type: "claude", enabled: true, cliPath: NSHomeDirectory() + "/.local/bin/claude", baseURL: "", models: []),
+            ProviderRecord(id: "chatgpt", name: "ChatGPT", type: "codex", enabled: true, cliPath: NSHomeDirectory() + "/.local/bin/codex", baseURL: "", models: []),
+            ProviderRecord(id: "google", name: "Google AI Pro", type: "antigravity", enabled: true, cliPath: NSHomeDirectory() + "/.local/bin/agy", baseURL: "", models: [])
+        ]
+    }
+    var storedConfiguration: BridgeConfiguration? {
+        guard let data = try? Data(contentsOf: state.appendingPathComponent("config.json")) else { return nil }
+        return try? JSONDecoder().decode(BridgeConfiguration.self, from: data)
+    }
     var timer: Timer?
     var polling = false
     var hydratedKeys = false
@@ -93,8 +107,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         add("OpenBridge · \(message)", nil)
         add("Open manager…", #selector(openManager))
         menu.addItem(.separator())
-        add("Start bridge", #selector(start), child == nil && snapshot == nil)
-        add("Stop bridge", #selector(stop), child != nil)
+        add("Start bridge", #selector(start), child == nil && snapshot == nil && !maintenanceRunning)
+        add("Stop bridge", #selector(stop), child != nil && !maintenanceRunning)
         add("Cancel request", #selector(cancel), snapshot?.active == true)
         menu.addItem(.separator())
         add("Copy model ID", #selector(copyModel), snapshot != nil)
@@ -147,7 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             case .success(let data):
                 do {
                     self.snapshot = try JSONDecoder().decode(BridgeSnapshot.self, from: data)
-                    self.message = self.snapshot?.active == true ? "Busy" : "Running"
+                    self.message = self.snapshot?.maintenance == true ? "CLI maintenance" : self.snapshot?.active == true ? "Busy" : "Running"
                     if !self.hydratedKeys {
                         self.hydratedKeys = true
                         if self.child != nil {
@@ -164,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
     @objc func start() {
-        guard child == nil, snapshot == nil else { return }
+        guard child == nil, snapshot == nil, !maintenanceRunning else { return }
         guard FileManager.default.isExecutableFile(atPath: node) else { feedback = "The bundled Node runtime is missing. Rebuild the app."; openManager(); return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: node)
@@ -189,7 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
     func refreshChecks() {
-        guard !checking, snapshot != nil else { return }
+        guard !checking, snapshot != nil, !maintenanceRunning else { return }
         checking = true
         request("/bridge/diagnostics", method: "POST", timeout: 25) { result in
             self.checking = false
@@ -222,7 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
     func discover(_ providerID: String) {
-        guard !discovering else { return }; discovering = true
+        guard !discovering, !maintenanceRunning else { return }; discovering = true
         request("/bridge/discover", method: "POST", body: jsonData(["providerID": providerID]), timeout: 25) { result in
             self.discovering = false
             do {
@@ -276,12 +290,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             if case .failure(let error) = result { self.feedback = error.localizedDescription }; self.poll()
         }
     }
+    func maintainCLI(_ plan: CLIMaintenancePlan) {
+        guard !maintenanceRunning, snapshot?.active != true else { return }
+        maintenanceRunning = true; rebuildMenu(); maintenanceSucceeded = false; maintenanceOutput = "Running…"
+        let locked = snapshot != nil
+        let finish: (Int32, String) -> Void = { code, output in
+            Task { @MainActor in
+                let success = code == 0 && FileManager.default.isExecutableFile(atPath: plan.expectedPath)
+                self.maintenanceSucceeded = success
+                self.maintenanceOutput = (success ? "Update completed. Refresh models to check the current catalogue.\n\n" : "Failed (exit \(code)). Your existing configuration was kept.\n\n") + output
+                let resume = {
+                    self.maintenanceRunning = false; self.rebuildMenu()
+                    self.refreshChecks(); self.poll()
+                }
+                let unlock = {
+                    if locked {
+                        self.request("/bridge/maintenance", method: "POST", body: self.jsonData(["enabled": false])) { result in
+                            if case .failure(let error) = result { self.maintenanceOutput += "\nCould not resume the bridge; restart it: " + error.localizedDescription }
+                            resume()
+                        }
+                    } else { resume() }
+                }
+
+                unlock()
+            }
+        }
+        let run = {
+            do { try executeMaintenance(plan, completion: finish) }
+            catch { finish(-1, error.localizedDescription) }
+        }
+        if locked {
+            request("/bridge/maintenance", method: "POST", body: jsonData(["enabled": true])) { result in
+                switch result {
+                case .success: run()
+                case .failure(let error): self.maintenanceRunning = false; self.maintenanceOutput = error.localizedDescription
+                }
+            }
+        } else { run() }
+    }
+    func resumeBridgeAfterMaintenance() {
+        guard !maintenanceRunning else { return }
+        request("/bridge/maintenance", method: "POST", body: jsonData(["enabled": false])) { result in
+            if case .failure(let error) = result { self.feedback = error.localizedDescription }
+            self.poll()
+        }
+    }
     func pickExecutable() -> String? {
         let panel = NSOpenPanel(); panel.title = "Choose CLI executable"; panel.prompt = "Choose"; panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false; panel.showsHiddenFiles = true
         return panel.runModal() == .OK ? panel.url?.path : nil
     }
     func installInstructions(_ type: String) {
-        let links = ["claude": "https://code.claude.com/docs/en/setup", "codex": "https://developers.openai.com/codex/cli", "antigravity": "https://antigravity.google/docs/cli/quickstart"]
+        let links = ["claude": "https://code.claude.com/docs/en/setup", "codex": "https://developers.openai.com/codex/cli", "antigravity": "https://www.antigravity.google/docs/getting-started?tab=cli"]
         if let value = links[type], let url = URL(string: value) { NSWorkspace.shared.open(url) }
     }
     func login(_ provider: ProviderRecord) {
@@ -303,6 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @objc func copyConfig() { if let key = bridgeKey, let id = snapshot?.selectedModelID { copy("API type: OpenAI Chat Completions\nBase URL: \(endpoint)/v1\nAPI key: \(key)\nModel: \(id)\n") } }
     @objc func quit() { NSApp.terminate(nil) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if maintenanceRunning { feedback = "Wait for CLI maintenance to finish before quitting."; openManager(); return .terminateCancel }
         guard let process = child, process.isRunning else { return .terminateNow }
         process.terminationHandler = { _ in Task { @MainActor in NSApp.reply(toApplicationShouldTerminate: true) } }
         process.terminate(); return .terminateLater

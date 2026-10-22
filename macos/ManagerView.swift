@@ -47,6 +47,7 @@ struct BridgeSnapshot: Codable {
     var selectedModelID: String
     var activeModel: String?
     var active: Bool
+    var maintenance: Bool?
     var config: BridgeConfiguration
     var diagnostics: [DiagnosticRecord]
     var checks: [String: RequestCheck]
@@ -67,6 +68,7 @@ struct ManagerView: View {
             List(selection: $selection) {
                 Section {
                     Label("Bridge", systemImage: "network").tag("overview")
+                    Label("Tools", systemImage: "wrench.and.screwdriver").tag("tools")
                 }
                 Section("Providers") {
                     ForEach(app.snapshot?.config.providers ?? []) { provider in
@@ -97,7 +99,8 @@ struct ManagerView: View {
                             .buttonStyle(.plain).accessibilityLabel("Dismiss notification")
                     }.padding(12).background(.quaternary)
                 }
-                if let selected = selection, let provider = app.snapshot?.config.providers.first(where: { $0.id == selected }) {
+                if selection == "tools" { ToolsView(app: app) }
+                else if let selected = selection, let provider = app.snapshot?.config.providers.first(where: { $0.id == selected }) {
                     ProviderDetail(app: app, provider: provider).id(provider.id)
                 } else { Overview(app: app) }
             }
@@ -108,7 +111,7 @@ struct ManagerView: View {
         .font(.system(size: 14))
         .navigationTitle("OpenBridge")
         .toolbar {
-            ToolbarItem { Button { app.refreshChecks() } label: { Label("Check installation", systemImage: "arrow.clockwise") }.disabled(app.snapshot == nil || app.checking) }
+            ToolbarItem { Button { app.refreshChecks() } label: { Label("Check installation", systemImage: "arrow.clockwise") }.disabled(app.snapshot == nil || app.checking || app.maintenanceRunning) }
         }
     }
 }
@@ -125,7 +128,7 @@ struct Overview: View {
                     }
                     Spacer()
                     Button(app.child == nil && app.snapshot == nil ? "Start bridge" : "Stop bridge") { app.child == nil && app.snapshot == nil ? app.start() : app.stop() }
-                        .disabled(app.child == nil && app.snapshot != nil)
+                        .disabled(app.maintenanceRunning || (app.child == nil && app.snapshot != nil))
                 }
                 if app.snapshot != nil && app.child == nil { Text("This bridge runs outside the app. Stop it in its terminal.").font(.system(size: 13)).foregroundStyle(.secondary) }
             }
@@ -182,6 +185,7 @@ struct ProviderDetail: View {
     let provider: ProviderRecord
     @State private var draft: ProviderRecord
     @State private var secret = ""
+    @State private var managingCLI = false
     @State private var search = ""
     @State private var modelName = ""
     @State private var upstream = ""
@@ -211,6 +215,7 @@ struct ProviderDetail: View {
                         if !diagnostic.detail.isEmpty { Text(diagnostic.detail).font(.system(size: 13)).foregroundStyle(.secondary) }
                     } else { Text("Not checked yet").foregroundStyle(.secondary) }
                     HStack {
+                        Button("Manage CLI…") { managingCLI = true }.disabled(draft != provider || app.maintenanceRunning)
                         Button("Installation instructions") { app.installInstructions(provider.type) }
                         Button("Sign in…") { app.login(provider) }
                         Button("Check again") { app.refreshChecks() }.disabled(app.checking)
@@ -265,11 +270,22 @@ struct ProviderDetail: View {
 
                 Text("Disabled models are unavailable through the API. A test uses your account allowance.").font(.system(size: 13)).foregroundStyle(.secondary)
             }
-            Section {
-                HStack { Spacer(); Button("Save changes") { app.saveProvider(draft, secret: secret); secret = "" }.buttonStyle(.borderedProminent).disabled(app.saving) }
-            }
         }
         .formStyle(.grouped)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                HStack {
+                    Text(draft != provider || !secret.isEmpty ? "Unsaved changes" : "All changes saved")
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button(app.saving ? "Saving…" : "Save changes") { app.saveProvider(draft, secret: secret) { success in if success { secret = "" } } }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(app.saving || app.maintenanceRunning || (draft == provider && secret.isEmpty))
+                }.padding(.horizontal, 20).padding(.vertical, 12)
+            }.background(.bar)
+        }
+        .sheet(isPresented: $managingCLI) { CLIMaintenanceSheet(app: app, provider: provider) }
         .onChange(of: provider) { old, new in if draft == old { draft = new } }
     }
 }
@@ -318,5 +334,93 @@ struct MessageDetails: View {
                     }
                 }.padding(24).frame(width: 600, height: 360)
             }
+    }
+}
+
+struct ToolsView: View {
+    @ObservedObject var app: AppDelegate
+    @State private var selected: ProviderRecord?
+    var body: some View {
+        Form {
+            Section {
+                Text("CLI tools").font(.title2.bold())
+                Text("Update existing CLI installations using their original installation method. Updates can refresh model support; account access and alias mappings can still differ.").foregroundStyle(.secondary)
+            }
+            if app.snapshot?.maintenance == true && !app.maintenanceRunning {
+                Section("Bridge paused") {
+                    Text("If no CLI updater is running, resume requests after interrupted maintenance.").foregroundStyle(.secondary)
+                    Button("Resume bridge") { app.resumeBridgeAfterMaintenance() }
+                }
+            }
+            ForEach(app.configuredProviders.filter { $0.type != "openai" }) { provider in
+                Section(provider.name) {
+                    let installed = FileManager.default.isExecutableFile(atPath: provider.cliPath)
+                    LabeledContent("Executable") { Text(provider.cliPath).font(.system(size: 13, design: .monospaced)).lineLimit(2).textSelection(.enabled) }
+                    LabeledContent("Installation", value: installed ? "Installed" : "Missing")
+                    if let check = app.snapshot?.diagnostics.first(where: { $0.providerID == provider.id }), !check.version.isEmpty {
+                        LabeledContent("Last checked version", value: check.version)
+                    }
+                    HStack {
+                        if installed { Button("Update CLI…") { selected = provider }.disabled(app.maintenanceRunning) }
+                        Button("Installation instructions") { app.installInstructions(provider.type) }
+                    }
+                }
+            }
+            Section {
+                Text("Install missing CLIs outside OpenBridge using the official instructions, then select their executable on the provider page. Node.js is bundled with OpenBridge. API providers such as Command Code do not need a CLI. After updating a CLI, use Fetch models on its provider page.").font(.system(size: 13)).foregroundStyle(.secondary)
+                Button("Check installed tools") { app.refreshChecks() }.disabled(app.snapshot == nil || app.checking || app.maintenanceRunning)
+            }
+        }.formStyle(.grouped)
+            .sheet(item: $selected) { provider in CLIMaintenanceSheet(app: app, provider: provider) }
+    }
+}
+
+struct CLIMaintenanceSheet: View {
+    @ObservedObject var app: AppDelegate
+    let provider: ProviderRecord
+    @Environment(\.dismiss) private var dismiss
+    @State private var started = false
+    let plan: Result<CLIMaintenancePlan, Error>
+    init(app: AppDelegate, provider: ProviderRecord) {
+        self.app = app; self.provider = provider
+        plan = Result { try CLIMaintenancePlan.make(type: provider.type, path: provider.cliPath,
+            installed: FileManager.default.isExecutableFile(atPath: provider.cliPath),
+            resolvedPath: URL(fileURLWithPath: provider.cliPath).resolvingSymlinksInPath().path) }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Update \(provider.name) CLI").font(.title2.bold())
+                    switch plan {
+                    case .success(let plan):
+                        LabeledContent("Installation method", value: plan.method)
+                        Text("Command").font(.headline)
+                        Text(plan.command).font(.system(size: 13, design: .monospaced)).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Bridge executable after completion: \(plan.expectedPath)").font(.system(size: 13)).foregroundStyle(.secondary)
+                        Text("New bridge requests pause while this runs. No model choices or account logins are changed. Fetch models afterward to refresh the catalogue.").foregroundStyle(.secondary)
+                        if app.snapshot?.active == true { Text("Wait for the active request to finish.").foregroundStyle(.orange) }
+                    case .failure(let error): Text(error.localizedDescription).foregroundStyle(.orange)
+                    }
+                    if started {
+                        if app.maintenanceRunning { ProgressView("Running CLI maintenance…") }
+                        Text(app.maintenanceOutput).font(.system(size: 13, design: .monospaced)).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Divider()
+            HStack {
+                Button("Installation instructions") { app.installInstructions(provider.type) }
+                Spacer()
+                Button(started ? "Close" : "Cancel") { dismiss() }.disabled(app.maintenanceRunning)
+                if case .success(let plan) = plan, !started {
+                    Button(plan.title) { started = true; app.maintainCLI(plan) }
+                        .buttonStyle(.borderedProminent).disabled(app.maintenanceRunning || app.snapshot?.active == true)
+                }
+            }.padding(16).background(.bar)
+        }.frame(width: 640, height: 460)
+            .interactiveDismissDisabled(app.maintenanceRunning)
     }
 }
