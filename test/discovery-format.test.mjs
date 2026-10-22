@@ -1,7 +1,8 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';
 import {claudeCatalogue,claudeModelRows,discoverClaude} from '../src/model-discovery.mjs';
-import {runClaude,validate,createBridge} from '../src/server.mjs';
+import {validate,createBridge} from '../src/server.mjs';
+import {runClaude} from '../src/providers.mjs';
 function fixture(t){
  const dir=mkdtempSync(join(tmpdir(),'openbridge-fixture-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
  const binary=join(dir,'claude');writeFileSync(binary,`#!/usr/bin/env node
@@ -28,10 +29,10 @@ test('Claude JSON schema/object output suppresses unstructured deltas and report
  const binary=fixture(t);
  for(const type of ['json_schema','json_object']){
   const chunks=[];let served;
-  const result=await runClaude([{role:'user',content:'JSON please'}],AbortSignal.timeout(5000),x=>chunks.push(x),type==='json_schema'?'schema':'object',binary,{response_format:{type,json_schema:{schema:{type:'object'}}}},x=>served=x);
+  const result=await runClaude([{role:'user',content:'JSON please'}],AbortSignal.timeout(5000),x=>chunks.push(x),{model:type==='json_schema'?'schema':'object',binary,responseFormat:{type,json_schema:{schema:{type:'object'}}},onModel:x=>served=x});
   assert.deepEqual(JSON.parse(result),{ok:true});assert.deepEqual(chunks,[result]);assert.equal(served,'actual-model');
  }
- await assert.rejects(runClaude([{role:'user',content:'JSON please'}],AbortSignal.timeout(5000),()=>{},'invalid',binary,{response_format:{type:'json_object'}}),/valid structured output/);
+ await assert.rejects(runClaude([{role:'user',content:'JSON please'}],AbortSignal.timeout(5000),()=>{},{model:'invalid',binary,responseFormat:{type:'json_object'}}),/valid structured output/);
  assert.throws(()=>validate({model:'x',messages:[{role:'user',content:'x'}],response_format:{type:'json_schema'}}),/JSON Schema/);
 });
 test('Claude HTTP route accepts response_format and forwards structured output options',async t=>{

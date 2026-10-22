@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {defaultConfig, resolveConfiguredModel} from '../src/config.mjs';
-import { parseCodex, parseAntigravity, runCommandCode, codexArgs, runEvents } from '../src/providers.mjs';
+import { parseCodex, parseAntigravity, codexArgs, runEvents, cleanEnvironment } from '../src/providers.mjs';
 
 test('concrete model IDs are fixed while subscription follows the menu', () => {
   const config=defaultConfig();config.selectedModel='chatgpt/default';
@@ -20,6 +20,17 @@ test('Codex event parsing does not leak reasoning and fails on tools and errors'
   assert.ok(parseCodex({ type:'turn.failed', error:{ message:'quota' } }).error);
   assert.ok(codexArgs().includes('forced_login_method="chatgpt"'));
   assert.ok(codexArgs().includes('features.shell_tool=false'));
+  assert.equal(codexArgs().some(a=>a.startsWith('model_reasoning_effort')),false);
+  const pinned=codexArgs({model:'gpt-6-sol',effort:'high'});
+  assert.ok(pinned.includes('model_reasoning_effort="high"'));
+  assert.deepEqual(pinned.slice(-2),['--model','gpt-6-sol']);
+});
+test('every CLI route strips API keys and provider switches from the environment', t => {
+  const names=['ANTHROPIC_API_KEY','OPENAI_API_KEY','CODEX_ACCESS_TOKEN','GEMINI_API_KEY','GOOGLE_APPLICATION_CREDENTIALS','COMMAND_CODE_API_KEY','CLAUDE_CODE_USE_BEDROCK'];
+  for(const name of names){process.env[name]='fixture';t.after(()=>delete process.env[name]);}
+  const env=cleanEnvironment();
+  for(const name of names) assert.equal(env[name],undefined);
+  assert.equal(env.PATH,process.env.PATH);
 });
 test('Antigravity fails closed when the CLI exposes tools or reports a failure', () => {
   assert.ok(parseAntigravity({event:'init',init:{tools:['run_command']}}).error);
@@ -28,27 +39,6 @@ test('Antigravity fails closed when the CLI exposes tools or reports a failure',
   assert.equal(parseAntigravity({event:'result',result:{status:'SUCCESS',response:'hello'}}).done,true);
   assert.ok(parseAntigravity({event:'result',result:{status:'ERROR',error:'quota'}}).error);
 });
-test('Command Code forwards native roles, handles split SSE and refuses incomplete/errors', async () => {
-  const messages = [{ role:'system', content:'system' }, { role:'user', content:'hello' }];
-  let sent;
-  const fetcher = async (url, options) => {
-    sent = { url, options };
-    return new Response(new ReadableStream({ start(controller) {
-      for (const text of ['data: {"choices":[{"delta":{"con', 'tent":"hello"}}]}\n\ndata: [DONE]\n\n']) controller.enqueue(new TextEncoder().encode(text));
-      controller.close();
-    } }));
-  };
-  const chunks = [];
-  assert.equal(await runCommandCode(messages, new AbortController().signal, x=>chunks.push(x), 'commandcode', { key:'fixture-key', upstreamModel:'fixture-model', fetcher }), 'hello');
-  assert.equal(sent.url, 'https://api.commandcode.ai/provider/v1/chat/completions');
-  assert.deepEqual(JSON.parse(sent.options.body).messages, messages);
-  assert.equal(JSON.parse(sent.options.body).model, 'fixture-model');
-  assert.deepEqual(chunks, ['hello']);
-  await assert.rejects(runCommandCode(messages, new AbortController().signal, ()=>{}, '', {key:'fixture',fetcher: async()=>new Response('',{status:429})}), /429/);
-  await assert.rejects(runCommandCode(messages, new AbortController().signal, ()=>{}, '', {key:'fixture',fetcher: async()=>new Response('data: {"choices":[]}\n\n')}), /without completion/);
-  await assert.rejects(runCommandCode(messages, new AbortController().signal, ()=>{}, '', {key:''}), /missing/);
-});
-
 test('CLI adapter preserves the original isolation failure over shutdown events', async t => {
   const dir=mkdtempSync(join(tmpdir(),'openbridge-events-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
   const file=join(dir,'fixture.mjs');

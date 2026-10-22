@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { defaultConfig, loadConfig, saveConfig, validateConfig } from '../src/config.mjs';
+import http from 'node:http';
 import { createBridge } from '../src/server.mjs';
 
 test('configuration persists without credentials and rejects unsafe or duplicate records', t=>{
@@ -33,13 +34,15 @@ test('disabled models and providers disappear from catalog and direct requests a
 
 test('custom provider config survives restart and catalog IDs identify the actual route', async t=>{
   const dir=mkdtempSync(join(tmpdir(),'openbridge-config-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
-  const path=join(dir,'config.json');let captured;
-  const config=defaultConfig();config.providers.push({id:'local',name:'Local fixture',type:'openai',enabled:true,cliPath:'',baseURL:'http://127.0.0.1:9999/v1',models:[{id:'local/example',name:'Example',upstreamModel:'example',enabled:true}]});
+  const path=join(dir,'config.json');let received;
+  const upstream=http.createServer(async(req,res)=>{let raw='';for await(const bytes of req)raw+=bytes;received={url:req.url,body:JSON.parse(raw)};res.setHeader('Content-Type','application/json');res.end(JSON.stringify({model:'upstream',choices:[{index:0,message:{role:'assistant',content:'hi'},finish_reason:'stop'}]}));});
+  await new Promise(r=>upstream.listen(0,'127.0.0.1',r));t.after(()=>upstream.close());
+  const config=defaultConfig();config.providers.push({id:'local',name:'Local fixture',type:'openai',enabled:true,cliPath:'',baseURL:`http://127.0.0.1:${upstream.address().port}/v1`,models:[{id:'local/example',name:'Example',upstreamModel:'example',enabled:true}]});
   saveConfig(path,config);
-  const server=createBridge({key:'test',configPath:path,runner:async(m,s,e,id,settings)=>{captured=settings;return id;}});
+  const server=createBridge({key:'test',configPath:path});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>server.close());
   const response=await fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`,{method:'POST',headers:{Authorization:'Bearer test'},body:JSON.stringify({model:'local/example',messages:[{role:'user',content:'hello'}]})});
-  const body=await response.json();assert.equal(body.model,'local/example');assert.equal(captured.modelSpec.upstreamModel,'example');assert.equal(captured.provider.baseURL,'http://127.0.0.1:9999/v1');
+  const body=await response.json();assert.equal(body.model,'local/example');assert.equal(received.body.model,'example');assert.equal(received.url,'/v1/chat/completions');
 });
 
 test('inference clients cannot change providers or read management state',async t=>{

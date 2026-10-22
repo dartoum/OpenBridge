@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { createBridge } from '../src/server.mjs';
+import { defaultConfig } from '../src/config.mjs';
 
 test('authenticated API, validation, streaming and upstream errors', async t => {
   const server = createBridge({ key: 'test', runner: async (messages, signal, emit) => {
@@ -87,20 +89,30 @@ test('model changes apply to the next request while the active model remains fix
 });
 
 test('provider routing and Command Code settings require auth and never expose keys', async t => {
-  let captured;
-  const server = createBridge({ key:'test', model:'sonnet', runner: async (m,s,e,model,settings)=>{ captured={model,settings}; return model; } });
+  let captured, upstreamAuth;
+  const upstream = http.createServer(async (req, res) => {
+    let raw = ''; for await (const bytes of req) raw += bytes;
+    upstreamAuth = req.headers.authorization;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ model:JSON.parse(raw).model, choices:[{ index:0, message:{ role:'assistant', content:'ok' }, finish_reason:'stop' }] }));
+  });
+  await new Promise(r=>upstream.listen(0,'127.0.0.1',r)); t.after(()=>upstream.close());
+  const config = defaultConfig(); config.providers[3].baseURL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  const server = createBridge({ key:'test', model:'sonnet', config, runner: async (m,s,e,model,settings)=>{ captured={model,settings}; return model; } });
   await new Promise(r=>server.listen(0,'127.0.0.1',r)); t.after(()=>server.close());
   const base=`http://127.0.0.1:${server.address().port}`;
   const headers={Authorization:'Bearer test'};
   const post=(path,value)=>fetch(base+path,{method:'POST',headers,body:JSON.stringify(value)});
+  assert.equal((await post('/v1/chat/completions',{model:'commandcode/deepseek/deepseek-v4-flash',messages:[{role:'user',content:'hello'}]})).status,502);
   assert.equal((await post('/bridge/credentials',{providerID:'commandcode',key:'fixture-secret'})).status,200);
   const status=await (await fetch(base+'/bridge/status',{headers})).json();
   assert.equal(status.credentialProviders.includes('commandcode'),true);
   assert.equal(JSON.stringify(status).includes('fixture-secret'),false);
   assert.equal((await post('/bridge/model',{model:'commandcode'})).status,200);
-  await post('/v1/chat/completions',{model:'subscription',messages:[{role:'user',content:'hello'}]});
-  assert.equal(captured.model,'commandcode/deepseek/deepseek-v4-flash');
-  assert.equal(captured.settings.commandCodeKey,'fixture-secret');
+  const answer=await (await post('/v1/chat/completions',{model:'subscription',messages:[{role:'user',content:'hello'}]})).json();
+  assert.equal(answer.model,'commandcode/deepseek/deepseek-v4-flash');
+  assert.equal(upstreamAuth,'Bearer fixture-secret');
+  assert.equal(captured,undefined);
   await post('/v1/chat/completions',{model:'chatgpt-subscription',messages:[{role:'user',content:'hello'}]});
   assert.equal(captured.model,'chatgpt/default');
   assert.equal((await post('/bridge/credentials',{providerID:'unknown',key:'fixture-secret'})).status,400);
