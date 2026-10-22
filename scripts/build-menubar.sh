@@ -3,7 +3,7 @@ set -eu
 cd "${0:A:h}/.."
 app_path="build/OpenBridge.app"
 mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources/bridge"
-xcrun swiftc -parse-as-library -module-cache-path /tmp/openbridge-swift-cache -target "$(uname -m)-apple-macos14.0" macos/OpenBridge.swift macos/ManagerView.swift macos/CLIMaintenance.swift macos/Icons.swift -o "$app_path/Contents/MacOS/OpenBridge" -framework AppKit -framework SwiftUI -framework Security
+xcrun swiftc -parse-as-library -module-cache-path /tmp/openbridge-swift-cache -target "$(uname -m)-apple-macos14.0" macos/OpenBridge.swift macos/ManagerView.swift macos/CLIMaintenance.swift macos/Icons.swift macos/CLIStatus.swift -o "$app_path/Contents/MacOS/OpenBridge" -framework AppKit -framework SwiftUI -framework Security
 # The icon lives in the bundle so Finder and the Dock show it while the app is not running.
 icon_dir=$(mktemp -d)
 "$app_path/Contents/MacOS/OpenBridge" --render-icon "$icon_dir/AppIcon.iconset"

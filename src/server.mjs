@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runProvider, toolMode } from './providers.mjs';
 import { loadConfig, validateConfig, saveConfig, catalog, availableModels, resolveConfiguredModel, EFFORT_PATTERN } from './config.mjs';
-import { diagnostics, discoverModels } from './diagnostics.mjs';
+import { discoverModels } from './model-discovery.mjs';
 
 const httpError = (status, message) => Object.assign(Error(message), { status });
 const CLI_OPTIONS = ['model', 'messages', 'stream', 'tools', 'tool_choice', 'reasoning_effort'];
@@ -122,14 +122,14 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
   if (!key || !adminKey) throw Error('Bridge and management keys required');
   let config = validateConfig(structuredClone(suppliedConfig || loadConfig(configPath)));
   if (model) config.selectedModel = resolveConfiguredModel(config, model)?.id || config.selectedModel;
-  let maintenance = false, active = false, activeModel = null, currentController, checks = {}, cachedDiagnostics = [];
+  let maintenance = false, active = false, activeModel = null, currentController, checks = {};
   const secrets = {};
   if (process.env.COMMAND_CODE_API_KEY) secrets.commandcode = process.env.COMMAND_CODE_API_KEY;
   const stats = { startedAt:new Date().toISOString(), requests:0, succeeded:0, failed:0, lastDurationMs:null };
   const persist = next => { saveConfig(configPath, next); config = next; };
 
   const routes = {
-    'GET /bridge/status': () => ({ service:'openbridge', version:7, model:config.selectedModel, selectedModelID:config.selectedModel, activeModel, active, maintenance, models:catalog(config), config, diagnostics:cachedDiagnostics, checks, runtime:{ version:process.version, path:process.execPath }, credentialProviders:Object.keys(secrets), ...stats }),
+    'GET /bridge/status': () => ({ service:'openbridge', version:7, model:config.selectedModel, selectedModelID:config.selectedModel, activeModel, active, maintenance, models:catalog(config), config, checks, runtime:{ version:process.version, path:process.execPath }, credentialProviders:Object.keys(secrets), ...stats }),
     'POST /bridge/maintenance': async req => {
       const body = await readJSON(req, 4096);
       if (typeof body.enabled !== 'boolean') throw httpError(400, 'enabled must be boolean');
@@ -147,7 +147,6 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
       for (const id of Object.keys(secrets)) if (!next.providers.some(p => p.id === id)) delete secrets[id];
       return { saved:true };
     },
-    'POST /bridge/diagnostics': async () => (cachedDiagnostics = await diagnostics(config, secrets)),
     'POST /bridge/discover': async req => {
       const body = await readJSON(req, 4096), provider = config.providers.find(p => p.id === body.providerID);
       if (!provider) throw httpError(400, 'Unknown provider');

@@ -36,17 +36,6 @@ struct CatalogEntry: Codable {
     var version: String
     var alias: Bool
 }
-struct DiagnosticRecord: Codable, Identifiable {
-    var providerID: String
-    var installed: Bool
-    var path: String
-    var version: String
-    var auth: String
-    var loggedIn: Bool?
-    var detail: String
-    var checkedAt: String
-    var id: String { providerID }
-}
 struct RequestCheck: Codable {
     var success: Bool
     var at: String
@@ -66,7 +55,6 @@ struct BridgeSnapshot: Codable {
     var maintenance: Bool?
     var models: [CatalogEntry]
     var config: BridgeConfiguration
-    var diagnostics: [DiagnosticRecord]
     var checks: [String: RequestCheck]
     var runtime: RuntimeRecord
     var credentialProviders: [String]
@@ -217,13 +205,18 @@ Text("For apps on this Mac. Claude supports function calling (emulated), JSON ou
             }
             Section("Installation") {
                 LabeledContent("Node.js", value: app.snapshot?.runtime.version ?? (FileManager.default.isExecutableFile(atPath: app.node) ? "Bundled" : "Missing"))
-                ForEach(app.snapshot?.diagnostics ?? []) { diagnostic in
+                ForEach(app.providers) { provider in
                     VStack(alignment: .leading, spacing: 3) {
-                        HStack { Text(app.providers.first(where: { $0.id == diagnostic.providerID })?.name ?? diagnostic.providerID); Spacer(); Text(diagnostic.path.isEmpty ? "No CLI required" : diagnostic.installed ? "Installed" : "Missing").foregroundStyle(diagnostic.installed ? Color.secondary : .orange) }
-                        Text(diagnostic.auth).font(secondaryFont).foregroundStyle(.secondary)
+                        if provider.type == "openai" {
+                            HStack { Text(provider.name); Spacer(); Text("No CLI required").foregroundStyle(.secondary) }
+                            Text(app.snapshot == nil ? "Bridge is stopped" : app.snapshot?.credentialProviders.contains(provider.id) == true ? "API key saved" : provider.id == "commandcode" ? "API key missing" : "No API key").font(secondaryFont).foregroundStyle(.secondary)
+                        } else {
+                            let status = app.cliStatus[provider.id]
+                            HStack { Text(provider.name); Spacer(); Text(status == nil ? "Checking…" : status?.installed == true ? "Installed" : "Missing").foregroundStyle(status?.installed == false ? Color.orange : .secondary) }
+                            if let status, status.installed { Text(status.auth).font(secondaryFont).foregroundStyle(.secondary) }
+                        }
                     }
                 }
-                if app.snapshot == nil { Text("Start the bridge to see installed CLIs and logins. You can open the app without installing every provider CLI.").foregroundStyle(.secondary) }
             }
             if let snapshot = app.snapshot {
                 Section("Requests since server start") {
@@ -278,7 +271,7 @@ struct ProviderDetail: View {
     }
     var editable: Bool { app.snapshot != nil && !app.maintenanceRunning }
     var keySaved: Bool { app.snapshot?.credentialProviders.contains(provider.id) == true }
-    var diagnostic: DiagnosticRecord? { app.snapshot?.diagnostics.first { $0.providerID == provider.id } }
+    var status: CLIStatus? { app.cliStatus[provider.id] }
     var installed: Bool { FileManager.default.isExecutableFile(atPath: provider.cliPath) }
     var cliName: String { ["claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity"][provider.type] ?? "The CLI" }
 
@@ -342,12 +335,12 @@ struct ProviderDetail: View {
                     if !keySaved { Text("Not needed for a server on this Mac, such as LM Studio or Ollama.").font(secondaryFont).foregroundStyle(.secondary) }
                     if provider.id == "commandcode" { Text("Usage counts against your Command Code plan and any extra credits you bought.").font(secondaryFont).foregroundStyle(.secondary) }
                 } else if installed {
-                    LabeledContent("Version", value: diagnostic.map { $0.version.isEmpty ? "Unknown" : $0.version } ?? (app.snapshot == nil ? "Bridge is stopped" : "Checking…"))
-                    if let diagnostic { LabeledContent("Account", value: diagnostic.auth) }
-                    if let detail = diagnostic?.detail, !detail.isEmpty { Text(detail).font(secondaryFont).foregroundStyle(.secondary) }
+                    LabeledContent("Version", value: status.map { $0.version.isEmpty ? "Unknown" : $0.version } ?? "Checking…")
+                    if let status { LabeledContent("Account", value: status.auth) }
+                    if let detail = status?.detail, !detail.isEmpty { Text(detail).font(secondaryFont).foregroundStyle(.secondary) }
                     HStack {
                         // Only offer to sign in when the CLI says nobody is.
-                        if diagnostic?.loggedIn != true { Button("Sign in…") { app.login(provider) } }
+                        if status?.loggedIn != true { Button("Sign in…") { app.login(provider) } }
                         Button("Update CLI…") { updatingCLI = true }.disabled(app.maintenanceRunning || app.snapshot?.active == true)
                     }
                 } else {
@@ -589,7 +582,7 @@ struct CLIMaintenanceSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Update \(provider.name) CLI").font(.title2.bold())
-                    if let version = app.snapshot?.diagnostics.first(where: { $0.providerID == provider.id })?.version, !version.isEmpty {
+                    if let version = app.cliStatus[provider.id]?.version, !version.isEmpty {
                         LabeledContent("Installed version", value: version)
                     }
                     switch plan {

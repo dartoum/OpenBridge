@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var message = "Stopped"
     @Published var issue: Issue?
     @Published var checking = false
+    @Published var cliStatus: [String: CLIStatus] = [:]
     @Published var saving = false
     @Published var discovering: String?
     @Published var discoveryStatus: [String: InlineStatus] = [:]
@@ -266,13 +267,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     var lastCheck = Date.distantPast
     func refreshChecksIfStale() { if Date().timeIntervalSince(lastCheck) > 15 { refreshChecks() } }
     func refreshChecks() {
-        guard !checking, snapshot != nil, !maintenanceRunning else { return }
+        guard !checking, !maintenanceRunning else { return }
         checking = true; lastCheck = Date()
-        request("/bridge/diagnostics", method: "POST", timeout: 25) { result in
-            self.checking = false
-            if case .failure(let error) = result { self.issue = Issue(title: "Installation check failed", message: error.localizedDescription) }
-            self.relocateMissingCLIs()
-            self.poll()
+        let targets = providers.filter { $0.type != "openai" }.map { ($0.id, $0.type, $0.cliPath) }
+        Task.detached {
+            var result: [String: CLIStatus] = [:]
+            for (id, type, path) in targets { result[id] = CLIStatus.check(type: type, path: path) }
+            let finished = result
+            await MainActor.run {
+                self.cliStatus = finished; self.checking = false
+                self.relocateMissingCLIs()
+            }
         }
     }
     // A CLI that moved (for example from npm to the native installer) is found again without asking for a path.

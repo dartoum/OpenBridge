@@ -32,7 +32,8 @@ quitting stops its own server. Externally started servers are not killed.
 
 The sidebar contains Claude Pro, ChatGPT, Google AI Pro and Command Code GOAT.
 A CLI provider page shows the installed version and login state, and offers
-**Sign in…** and **Update CLI…**. OpenBridge finds a CLI in the usual places
+**Sign in…** and **Update CLI…**. The app reads the version and login itself, so
+they show even when the bridge is stopped. OpenBridge finds a CLI in the usual places
 (`~/.local/bin`, Homebrew) by itself and re-checks when you open the page, when
 the app returns to the front and after an update, so there is no refresh button.
 If no CLI is found, **Choose program…** lets you point to it. **Sign in…** only appears when the CLI reports that nobody is
