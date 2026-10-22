@@ -101,9 +101,9 @@ struct ManagerView: View {
     @State private var adding = false
     @State private var details: DetailText?
     @State private var confirmingRemoval = false
-    // Only providers the person added can be removed; the built-in ones can be switched off.
+    // API providers can be removed; the CLI providers belong to the app and can only be switched off.
     var selectedProvider: ProviderRecord? { app.providers.first { $0.id == selection } }
-    var removable: Bool { selectedProvider?.id.hasPrefix("provider-") == true }
+    var removable: Bool { selectedProvider?.type == "openai" }
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
@@ -128,7 +128,7 @@ struct ManagerView: View {
                             .help("Add a provider").accessibilityLabel("Add provider")
                             .disabled(app.snapshot == nil || app.maintenanceRunning)
                         Button { confirmingRemoval = true } label: { Image(systemName: "minus").frame(width: 24, height: 22) }
-                            .help(removable ? "Remove the selected provider" : "Built-in providers can only be switched off")
+                            .help(removable ? "Remove the selected provider" : "Subscription providers can only be switched off")
                             .accessibilityLabel("Remove provider")
                             .disabled(!removable || app.snapshot == nil || app.maintenanceRunning)
                         Spacer()
@@ -268,7 +268,6 @@ struct ProviderDetail: View {
     @State private var updatingCLI = false
     @State private var showAdvanced = false
     @State private var changingKey = false
-    @State private var showOlder = false
     @State private var search = ""
     @State private var newName = ""
     @State private var newID = ""
@@ -379,11 +378,6 @@ struct ProviderDetail: View {
                     ForEach(list.shown) { ModelRow(app: app, provider: provider, model: $0) }
                     if list.hidden > 0 {
                         Text("\(list.hidden) more models. Search to find one and turn it on.").font(secondaryFont).foregroundStyle(.secondary)
-                    }
-                    if !list.older.isEmpty {
-                        ExpandRow(title: "Older versions (\(list.older.count))", isExpanded: $showOlder) {
-                            ForEach(list.older) { ModelRow(app: app, provider: provider, model: $0) }
-                        }
                     }
                 }
                 Section {

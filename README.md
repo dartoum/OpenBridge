@@ -41,19 +41,18 @@ real request an app made, and nothing is sent to your account on its own.
 The **+** under the sidebar adds a provider; it asks for a name, the address of an OpenAI-compatible endpoint
 and an API key (empty for a server on this Mac, such as LM Studio or Ollama).
 OpenBridge then loads that endpoint's model list and opens its page; the models
-start off. The **−** next to it removes the selected provider you added (after a confirmation;
-its Keychain key is deleted too). The
-built-in providers can only be switched off. API keys go in macOS Keychain, not the configuration file. For Command Code, enter its key and select a model included in your plan.
+start off. The **−** next to it removes the selected API provider, including Command Code
+(after a confirmation; its Keychain key is deleted too). The subscription
+providers (Claude, ChatGPT, Google) can only be switched off. API keys go in macOS Keychain, not the configuration file. For Command Code, enter its key and select a model included in your plan.
 No Command Code CLI is required. GOAT usage is metered against plan credits;
 provider rules may also consume purchased top-ups. OpenBridge buys nothing and
 cannot enforce a provider-side plan-only spending lock.
 
 Models are one flat list with the model ID as a column, ordered by family and
-newest version first. The newest version of each family and every enabled model
-stay visible; the rest sit behind an **Older versions** row, unless the list is
-short (eight or fewer) or you are searching. An endpoint with a very long list
-(more than 40) shows only enabled models plus a hint; search to find and enable
-others. A provider may list up to 1000 models. Family shortcuts such as
+newest version first, with every model the provider offers (a thinking level
+that is part of a model ID, such as Antigravity's Low/Medium/High, is a separate
+row). An endpoint with a very long list (more than 40) shows only enabled models
+plus a hint; search to find and enable others. A provider may list up to 1000 models. Family shortcuts such as
 `claude/haiku` follow whatever version the CLI picks automatically; they are kept
 for apps that already use them and live under **Advanced** (shown as
 “Automatic” in the model picker). API providers can add a model ID by hand under

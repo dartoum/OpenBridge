@@ -92,7 +92,7 @@ errors that need attention, with full text behind Show Details. Do not add
 window-wide banners or toasts.
 
 Models are one flat list (no family headings) with the ID as a column, newest
-version first; older disabled versions collapse into one row. Family aliases (which follow
+version first, no "older versions" folding (thinking levels in IDs are not versions); lists above 40 show only enabled models until a search. Family aliases (which follow
 the CLI) are shortcut IDs under Advanced, not model rows; users need not know
 about CLI defaults. There is no Test button: do not send requests to a person's
 account unasked; show the outcome of real requests instead. Ordering comes from model IDs in
