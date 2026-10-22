@@ -76,13 +76,6 @@ struct BridgeSnapshot: Codable {
     var lastDurationMs: Int?
 }
 
-struct FamilyGroup: Identifiable {
-    let id: String
-    let name: String
-    var aliases: [ModelRecord] = []
-    var versions: [ModelRecord] = []
-}
-
 struct DetailText: Identifiable {
     let id = UUID()
     let text: String
@@ -256,6 +249,7 @@ struct ProviderDetail: View {
     @State private var fieldError: String?
     @State private var updatingCLI = false
     @State private var showAdvanced = false
+    @State private var showOlder = false
     @State private var search = ""
     @State private var newName = ""
     @State private var newID = ""
@@ -347,8 +341,14 @@ struct ProviderDetail: View {
                         Text("Fetch models loads the newest versions. New models start off; turn on the ones apps may use.").font(secondaryFont).foregroundStyle(.secondary)
                     }
                 }
-                ForEach(app.families(provider, search: search)) { group in
-                    FamilySection(app: app, provider: provider, group: group, searching: !search.isEmpty)
+                let list = app.modelList(provider, search: search)
+                Section {
+                    ForEach(list.shown) { ModelRow(app: app, provider: provider, model: $0) }
+                    if !list.older.isEmpty {
+                        ExpandRow(title: "Older versions (\(list.older.count))", isExpanded: $showOlder) {
+                            ForEach(list.older) { ModelRow(app: app, provider: provider, model: $0) }
+                        }
+                    }
                 }
                 Section {
                     ExpandRow(title: "Advanced", isExpanded: $showAdvanced) {
@@ -409,31 +409,6 @@ func displayName(_ model: ModelRecord, in provider: ProviderRecord) -> String {
     return name
 }
 
-struct FamilySection: View {
-    @ObservedObject var app: AppDelegate
-    let provider: ProviderRecord
-    let group: FamilyGroup
-    let searching: Bool
-    @State private var showOlder: Bool
-    init(app: AppDelegate, provider: ProviderRecord, group: FamilyGroup, searching: Bool) {
-        self.app = app; self.provider = provider; self.group = group; self.searching = searching
-        _showOlder = State(initialValue: group.versions.dropFirst().contains(where: \.enabled))
-    }
-    var older: [ModelRecord] { Array(group.versions.dropFirst()) }
-    var body: some View {
-        Section(group.name) {
-            if searching || group.versions.count < 3 {
-                ForEach(group.versions) { ModelRow(app: app, provider: provider, model: $0) }
-            } else {
-                ModelRow(app: app, provider: provider, model: group.versions[0])
-                ExpandRow(title: "Older versions (\(older.count))", isExpanded: $showOlder) {
-                    ForEach(older) { ModelRow(app: app, provider: provider, model: $0) }
-                }
-            }
-        }
-    }
-}
-
 struct ModelRow: View {
     @ObservedObject var app: AppDelegate
     let provider: ProviderRecord
@@ -443,11 +418,12 @@ struct ModelRow: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(displayName(model, in: provider)).lineLimit(2)
-                Text(model.id).font(identifierFont).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 if model.source?.hasPrefix("models.dev") == true { Text("Not confirmed for your account").font(secondaryFont).foregroundStyle(.secondary) }
                 status
-            }
-            Spacer(minLength: 12)
+            }.frame(width: 190, alignment: .leading)
+            // The ID is a column, so every row lines up and can be scanned or copied.
+            Text(model.id).font(identifierFont).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                .textSelection(.enabled).help(model.id).frame(maxWidth: .infinity, alignment: .leading)
             CopyIconButton(value: model.id) { app.copy(model.id) }
             Toggle("Enabled", isOn: Binding(get: { model.enabled }, set: { value in app.updateModel(model.id) { $0.enabled = value } }))
                 .labelsHidden().toggleStyle(.switch).accessibilityLabel("Enable \(displayName(model, in: provider))")

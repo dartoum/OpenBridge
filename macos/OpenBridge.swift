@@ -387,21 +387,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         guard let model = provider.models.first(where: { $0.id == entry.id }) else { return entry.name }
         return entry.alias ? displayName(model, in: provider) + " · Automatic" : displayName(model, in: provider)
     }
-    func families(_ provider: ProviderRecord, search: String) -> [FamilyGroup] {
-        var groups: [FamilyGroup] = []
-        for entry in snapshot?.models ?? [] where entry.providerID == provider.id {
+    // One flat list in catalogue order (family, then newest version first). The newest version of each family and
+    // every enabled model stay visible; the rest sit behind "Older versions". Short lists and searches show everything.
+    func modelList(_ provider: ProviderRecord, search: String) -> (shown: [ModelRecord], older: [ModelRecord]) {
+        let entries = (snapshot?.models ?? []).filter { $0.providerID == provider.id }
+        let withVersions = Set(entries.filter { !$0.alias }.map(\.family))
+        var seen = Set<String>(), shown: [ModelRecord] = [], older: [ModelRecord] = []
+        let everything = !search.isEmpty || entries.count <= 8
+        for entry in entries {
             guard let model = provider.models.first(where: { $0.id == entry.id }) else { continue }
             if !search.isEmpty && !(model.name + " " + model.id).localizedCaseInsensitiveContains(search) { continue }
-            let name = provider.type == "claude" && entry.familyName.hasPrefix("Claude ") ? String(entry.familyName.dropFirst("Claude ".count)) : entry.familyName
-            if groups.last?.id != entry.family { groups.append(FamilyGroup(id: entry.family, name: name)) }
-            if entry.alias { groups[groups.count - 1].aliases.append(model) } else { groups[groups.count - 1].versions.append(model) }
+            // Shortcut IDs (claude/sonnet) live under Advanced unless their family has nothing else.
+            if entry.alias && withVersions.contains(entry.family) { continue }
+            let newest = seen.insert(entry.family).inserted
+            if everything || newest || model.enabled { shown.append(model) } else { older.append(model) }
         }
-        // A family that has only a shortcut still needs a row to switch on.
-        return groups.map { group in
-            var group = group
-            if group.versions.isEmpty { group.versions = group.aliases }
-            return group
-        }.filter { !$0.versions.isEmpty }
+        return (shown, older)
     }
     func discover(_ providerID: String) {
         guard discovering == nil, !maintenanceRunning else { return }

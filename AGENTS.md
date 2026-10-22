@@ -85,10 +85,11 @@ Show results next to the control that caused them. Reserve system alerts for
 errors that need attention, with full text behind Show Details. Do not add
 window-wide banners or toasts.
 
-Models are shown per family, newest version first. Family aliases (which follow
+Models are one flat list (no family headings) with the ID as a column, newest
+version first; older disabled versions collapse into one row. Family aliases (which follow
 the CLI) are shortcut IDs under Advanced, not model rows; users need not know
 about CLI defaults. There is no Test button: do not send requests to a person's
-account unasked; show the outcome of real requests instead. Grouping comes from model IDs in
+account unasked; show the outcome of real requests instead. Ordering comes from model IDs in
 src/model-families.mjs and is presentation only; routing uses configured IDs.
 Thinking is chosen on the Bridge page only and remembered per model, limited to levels the CLI itself reported
 (`efforts`), overridable per request with `reasoning_effort`. Never send a level

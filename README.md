@@ -43,13 +43,14 @@ No Command Code CLI is required. GOAT usage is metered against plan credits;
 provider rules may also consume purchased top-ups. OpenBridge buys nothing and
 cannot enforce a provider-side plan-only spending lock.
 
-Models are grouped per family (for example Opus, Sonnet, Haiku), newest version
-first. The newest version is always visible; older versions sit behind a row that
-opens by itself when one of them is enabled. Family shortcuts such as
+Models are one flat list with the model ID as a column, ordered by family and
+newest version first. The newest version of each family and every enabled model
+stay visible; the rest sit behind an **Older versions** row, unless the list is
+short (eight or fewer) or you are searching. Family shortcuts such as
 `claude/haiku` follow whatever version the CLI picks automatically; they are kept
 for apps that already use them and live under **Advanced** (shown as
 “Automatic” in the model picker). API providers can add a model ID by hand under
-**Advanced**. Claude, Codex, API and Antigravity discovery are supported;
+**Advanced**. Search the list, or load new models with **Fetch models**. Claude, Codex, API and Antigravity discovery are supported;
 newly discovered models are initially off, and fetching removes only disabled
 catalogue entries that a previous fetch added and the catalogue no longer lists.
 
