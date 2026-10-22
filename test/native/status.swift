@@ -9,6 +9,9 @@ import Foundation
         precondition(!CLIStatus.claudeLogin(from: "not json").loggedIn)
         precondition(CLIStatus.codexLogin(from: "Logged in using ChatGPT").loggedIn)
         precondition(!CLIStatus.codexLogin(from: "Not logged in").loggedIn)
+        precondition(CLIStatus.antigravityLogin(code: 0, output: "Fetching available models...\ngemini-4-argon-medium\tGemini 4 Argon (Medium)\n").loggedIn == true)
+        precondition(CLIStatus.antigravityLogin(code: 1, output: "Error: Please sign in to view available models.").loggedIn == false)
+        precondition(CLIStatus.antigravityLogin(code: 1, output: "network down").loggedIn == nil)
         // Missing program: reported, never crashes.
         let missing = CLIStatus.check(type: "claude", path: "/nonexistent/claude")
         precondition(!missing.installed && missing.detail.contains("missing"))

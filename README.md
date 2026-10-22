@@ -37,7 +37,7 @@ they show even when the bridge is stopped. OpenBridge finds a CLI in the usual p
 (`~/.local/bin`, Homebrew) by itself and re-checks when you open the page, when
 the app returns to the front and after an update, so there is no refresh button.
 If no CLI is found, **Choose program…** lets you point to it. **Sign in…** only appears when the CLI reports that nobody is
-signed in. There is no test button: each model shows the outcome of the last
+signed in (for Antigravity, when `agy models` refuses to list models). There is no test button: each model shows the outcome of the last
 real request an app made, and nothing is sent to your account on its own.
 
 The **+** under the sidebar adds a provider; it asks for a name, the address of an OpenAI-compatible endpoint

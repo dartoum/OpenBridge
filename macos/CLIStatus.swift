@@ -20,6 +20,13 @@ struct CLIStatus: Equatable {
         output.localizedCaseInsensitiveContains("ChatGPT") ? (true, "ChatGPT login confirmed") : (false, "No confirmed ChatGPT login")
     }
 
+    // Antigravity has no status command, but `agy models` only lists models for a signed-in account.
+    static func antigravityLogin(code: Int32, output: String) -> (loggedIn: Bool?, text: String) {
+        if code == 0 && output.split(separator: "\n").contains(where: { $0.contains("\t") }) { return (true, "Google login confirmed") }
+        if output.localizedCaseInsensitiveContains("sign in") { return (false, "Not signed in") }
+        return (nil, "Could not read the login status")
+    }
+
     static let credentialPrefixes = ["ANTHROPIC_", "OPENAI_", "CLAUDE_CODE_USE_", "GOOGLE_GENAI_USE_"]
     static let credentialNames: Set<String> = ["CLAUDECODE", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "COMMAND_CODE_API_KEY", "BRIDGE_API_KEY"]
 
@@ -55,7 +62,8 @@ struct CLIStatus: Equatable {
         case "codex":
             if let login = run(path, ["login", "status"], timeout: 7) { let value = codexLogin(from: login.output); status.loggedIn = value.loggedIn; status.auth = value.text }
         default:
-            status.detail = "This CLI cannot report a login. Text-only isolation is currently blocked, so requests through it fail."
+            if let login = run(path, ["models"], timeout: 15) { let value = antigravityLogin(code: login.code, output: login.output); status.loggedIn = value.loggedIn; status.auth = value.text }
+            status.detail = "Text-only isolation is currently blocked, so requests through this CLI fail even when signed in."
         }
         return status
     }
