@@ -392,21 +392,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         return entry.alias ? displayName(model, in: provider) + " · Automatic" : displayName(model, in: provider)
     }
     // One flat list in catalogue order (family, then newest version first). The newest version of each family and
-    // every enabled model stay visible; the rest sit behind "Older versions". Short lists and searches show everything.
-    func modelList(_ provider: ProviderRecord, search: String) -> (shown: [ModelRecord], older: [ModelRecord]) {
+    // every enabled model stay visible; the rest sit behind "Older versions". Searches and short lists show everything.
+    // A long list (an endpoint with hundreds of models) shows only enabled models until you search.
+    func modelList(_ provider: ProviderRecord, search: String) -> (shown: [ModelRecord], older: [ModelRecord], hidden: Int) {
         let entries = (snapshot?.models ?? []).filter { $0.providerID == provider.id }
         let withVersions = Set(entries.filter { !$0.alias }.map(\.family))
-        var seen = Set<String>(), shown: [ModelRecord] = [], older: [ModelRecord] = []
+        var seen = Set<String>(), shown: [ModelRecord] = [], older: [ModelRecord] = [], hidden = 0
         let everything = !search.isEmpty || entries.count <= 8
+        let long = search.isEmpty && entries.count > 40
         for entry in entries {
             guard let model = provider.models.first(where: { $0.id == entry.id }) else { continue }
             if !search.isEmpty && !(model.name + " " + model.id).localizedCaseInsensitiveContains(search) { continue }
             // Shortcut IDs (claude/sonnet) live under Advanced unless their family has nothing else.
             if entry.alias && withVersions.contains(entry.family) { continue }
+            if long && !model.enabled { hidden += 1; continue }
             let newest = seen.insert(entry.family).inserted
             if everything || newest || model.enabled { shown.append(model) } else { older.append(model) }
         }
-        return (shown, older)
+        return (shown, older, hidden)
     }
     func discover(_ providerID: String) {
         guard discovering == nil, !maintenanceRunning else { return }

@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { sortModels } from './model-families.mjs';
 
 export const legacySelections = { sonnet:'claude/sonnet', opus:'claude/opus', haiku:'claude/haiku', codex:'chatgpt/default', 'gemini-auto':'google/gemini-3.8-flash-medium', 'gemini-pro':'google/gemini-4-argon-medium', 'gemini-flash':'google/gemini-3.8-flash-medium', commandcode:'commandcode/deepseek/deepseek-v4-flash' };
+export const MAX_MODELS = 1000;
 export const EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,23}$/;
 const PROVIDER_FIELDS = ['id', 'name', 'type', 'enabled', 'cliPath', 'baseURL', 'models'];
 const MODEL_FIELDS = ['id', 'upstreamModel', 'name', 'enabled', 'source', 'resolvedModel', 'efforts', 'defaultEffort', 'effort'];
@@ -64,7 +65,7 @@ export function validateConfig(value) {
   for (const p of value.providers) {
     const valid = p && /^[a-z][a-z0-9-]{0,50}$/.test(p.id) && !providers.has(p.id) && text(p.name, 120)
       && ['claude', 'codex', 'antigravity', 'openai'].includes(p.type) && typeof p.enabled === 'boolean'
-      && Array.isArray(p.models) && p.models.length <= 300 && typeof p.cliPath === 'string' && typeof p.baseURL === 'string';
+      && Array.isArray(p.models) && p.models.length <= MAX_MODELS && typeof p.cliPath === 'string' && typeof p.baseURL === 'string';
     if (!valid) throw Error('Invalid provider');
     if (Object.keys(p).some(k => !PROVIDER_FIELDS.includes(k))) throw Error('Unknown provider field; credentials belong in Keychain');
     providers.add(p.id);

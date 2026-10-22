@@ -63,3 +63,12 @@ test('oversized requests return HTTP 413 without resetting the connection',async
   const response=await fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`,{method:'POST',headers:{Authorization:'Bearer test'},body:JSON.stringify({model:'claude/sonnet',messages:[{role:'user',content:'x'.repeat(300000)}]})});
   assert.equal(response.status,413);
 });
+
+test('a provider may list up to 1000 models', () => {
+  const config=defaultConfig();
+  const many=count=>Array.from({length:count},(_,i)=>({id:`commandcode/m${i}`,upstreamModel:`m${i}`,name:`M${i}`,enabled:false}));
+  config.providers[3].models.push(...many(999));
+  assert.doesNotThrow(()=>validateConfig(config));
+  config.providers[3].models.push(...many(5).map((m,i)=>({...m,id:`commandcode/x${i}`,upstreamModel:`x${i}`})));
+  assert.throws(()=>validateConfig(config),/Invalid provider/);
+});

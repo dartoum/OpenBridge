@@ -49,7 +49,9 @@ cannot enforce a provider-side plan-only spending lock.
 Models are one flat list with the model ID as a column, ordered by family and
 newest version first. The newest version of each family and every enabled model
 stay visible; the rest sit behind an **Older versions** row, unless the list is
-short (eight or fewer) or you are searching. Family shortcuts such as
+short (eight or fewer) or you are searching. An endpoint with a very long list
+(more than 40) shows only enabled models plus a hint; search to find and enable
+others. A provider may list up to 1000 models. Family shortcuts such as
 `claude/haiku` follow whatever version the CLI picks automatically; they are kept
 for apps that already use them and live under **Advanced** (shown as
 “Automatic” in the model picker). API providers can add a model ID by hand under

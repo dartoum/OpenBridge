@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { cleanEnvironment } from './providers.mjs';
-import { EFFORT_PATTERN } from './config.mjs';
+import { EFFORT_PATTERN, MAX_MODELS } from './config.mjs';
 
 const execute = promisify(execFile);
 const VALID_ID = /^[a-zA-Z0-9_.:/-]{1,180}$/;
@@ -72,7 +72,7 @@ export function claudeModelRows(models) {
 
 // Only what the Claude CLI itself reports: that is what this account's CLI can run. A CLI update refreshes the list.
 export async function discoverClaude(provider, signal) {
-  return claudeModelRows(await claudeCatalogue(provider.cliPath, signal)).slice(0, 300);
+  return claudeModelRows(await claudeCatalogue(provider.cliPath, signal)).slice(0, MAX_MODELS);
 }
 
 export async function discoverCodex(provider, signal) {
@@ -82,7 +82,7 @@ export async function discoverCodex(provider, signal) {
     const value = JSON.parse(stdout);
     const models = Array.isArray(value) ? value : value.models;
     if (!Array.isArray(models)) throw Error('Codex returned no model catalogue');
-    return models.filter(m => typeof m.slug === 'string' && VALID_ID.test(m.slug) && m.visibility !== 'hide').slice(0, 300).map(m => {
+    return models.filter(m => typeof m.slug === 'string' && VALID_ID.test(m.slug) && m.visibility !== 'hide').slice(0, MAX_MODELS).map(m => {
       const levels = efforts((m.supported_reasoning_levels || []).map(level => typeof level === 'string' ? level : level?.effort));
       const fallback = levels.efforts?.includes(m.default_reasoning_level) ? { defaultEffort:m.default_reasoning_level } : {};
       return { id:m.slug, name:m.display_name || m.slug, source:'Codex CLI catalogue', resolvedModel:m.slug, ...levels, ...fallback };

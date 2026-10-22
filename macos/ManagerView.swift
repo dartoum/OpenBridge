@@ -360,6 +360,9 @@ struct ProviderDetail: View {
                 let list = app.modelList(provider, search: search)
                 Section {
                     ForEach(list.shown) { ModelRow(app: app, provider: provider, model: $0) }
+                    if list.hidden > 0 {
+                        Text("\(list.hidden) more models. Search to find one and turn it on.").font(secondaryFont).foregroundStyle(.secondary)
+                    }
                     if !list.older.isEmpty {
                         ExpandRow(title: "Older versions (\(list.older.count))", isExpanded: $showOlder) {
                             ForEach(list.older) { ModelRow(app: app, provider: provider, model: $0) }

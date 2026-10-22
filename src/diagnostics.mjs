@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { discoverClaude, discoverCodex } from './model-discovery.mjs';
 import { cleanEnvironment } from './providers.mjs';
+import { MAX_MODELS } from './config.mjs';
 
 const execute = promisify(execFile);
 const VALID_ID = /^[a-zA-Z0-9_.:/-]{1,180}$/;
@@ -54,7 +55,7 @@ export async function discoverModels(provider, key, signal) {
     const text = await response.text();
     if (text.length > 2 * 1024 * 1024) throw Error('Model response too large');
     const result = JSON.parse(text);
-    return (result.data || []).filter(m => typeof m.id === 'string' && VALID_ID.test(m.id)).slice(0, 300).map(m => ({ id:m.id, name:m.name || m.id, source:'Provider API' }));
+    return (result.data || []).filter(m => typeof m.id === 'string' && VALID_ID.test(m.id)).slice(0, MAX_MODELS).map(m => ({ id:m.id, name:m.name || m.id, source:'Provider API' }));
   }
   throw Error('This CLI has no supported model list. Add model IDs manually.');
 }
