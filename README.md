@@ -19,7 +19,9 @@ scripts/build-menubar.sh
 open build/OpenBridge.app
 ```
 
-The window opens on launch. **Start bridge** opens `127.0.0.1:8000`. OpenBridge
+The window opens on launch and the bridge starts by itself on `127.0.0.1:8000`
+(unless something already answers there, or the app is opened with `--no-start`);
+**Stop bridge** and **Start bridge** on the Bridge page control it. OpenBridge
 is a normal Dock app with the standard menus, so the window can always be found
 again from the Dock, Cmd-Tab or the Window menu. The menu bar icon (dimmed while
 stopped, with a dot during a request) and the Dock menu offer start/stop,

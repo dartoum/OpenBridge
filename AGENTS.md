@@ -38,7 +38,9 @@ Disabled models/providers must be absent from `/v1/models` AND refused on direct
 requests. Snapshot provider, model and credentials per request; configuration
 updates affect future calls. Persist nonsecret settings atomically.
 
-Only stop a server owned by the app. Closing the management window leaves the
+The app starts its server at launch unless one already answers on the port; without
+a server the provider pages cannot show versions or logins, so they must say the bridge
+is stopped, never an endless “Checking…”. Only stop a server owned by the app. Closing the management window leaves the
 menu bar and server alive; quitting stops the app-owned child. Installation,
 login status and a successful real request are separate observations.
 

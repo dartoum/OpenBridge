@@ -118,7 +118,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         item.button?.imagePosition = .imageOnly
         rebuildMenu()
         poll()
-        if CommandLine.arguments.contains("--start") { start() }
+        // The bridge is what this app is for: start it unless something already answers on the port (or --no-start).
+        if !CommandLine.arguments.contains("--no-start") { startUnlessRunning() }
         if !CommandLine.arguments.contains("--background") { openManager() }
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in Task { @MainActor in self?.poll() } }
     }
@@ -254,6 +255,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
         do { try process.run(); child = process; message = "Starting…"; hydratedKeys = false; rebuildMenu() }
         catch { issue = Issue(title: "Bridge could not start", message: error.localizedDescription); message = "Start failed"; openManager() }
+    }
+    func startUnlessRunning() {
+        request("/bridge/status", timeout: 2) { result in
+            if case .failure = result { self.start() }
+        }
     }
     @objc func stop() { child?.terminate(); message = "Stopping…"; rebuildMenu() }
     @objc func cancel() { request("/bridge/cancel", method: "POST") { _ in self.poll() } }

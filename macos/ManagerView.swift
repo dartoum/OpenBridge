@@ -342,7 +342,7 @@ struct ProviderDetail: View {
                     if !keySaved { Text("Not needed for a server on this Mac, such as LM Studio or Ollama.").font(secondaryFont).foregroundStyle(.secondary) }
                     if provider.id == "commandcode" { Text("Usage counts against your Command Code plan and any extra credits you bought.").font(secondaryFont).foregroundStyle(.secondary) }
                 } else if installed {
-                    LabeledContent("Version", value: diagnostic.map { $0.version.isEmpty ? "Unknown" : $0.version } ?? "Checking…")
+                    LabeledContent("Version", value: diagnostic.map { $0.version.isEmpty ? "Unknown" : $0.version } ?? (app.snapshot == nil ? "Bridge is stopped" : "Checking…"))
                     if let diagnostic { LabeledContent("Account", value: diagnostic.auth) }
                     if let detail = diagnostic?.detail, !detail.isEmpty { Text(detail).font(secondaryFont).foregroundStyle(.secondary) }
                     HStack {
