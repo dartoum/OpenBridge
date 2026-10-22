@@ -1,9 +1,9 @@
 # OpenBridge
 
-Standalone local text bridge; Node built-ins only. Do not add a plugin lifecycle
+Standalone local text bridge; HTTP transport uses Node built-ins. The pinned official Gemini CLI is a runtime dependency, not an embedded SDK. Do not add a plugin lifecycle
 or a framework before the standalone use case works.
 
-Keep subscription and API billing separate. Never read or copy credential files.
+Keep subscription and API billing separate. Never read or copy provider credential files; official CLIs own their account authentication. The app stores its Command Code key in its own macOS Keychain item.
 No silent fallback to API keys. CLI tools and extensions must remain disabled
 for the text-chat adapter. Never expose the listener beyond loopback by default.
 
@@ -17,4 +17,6 @@ Never commit `.bridge-key`, credentials, prompts or response logs.
 The native AppKit menu bar controller is built with scripts/build-menubar.sh;
 it controls only its own child process. Do not kill externally started servers.
 Model selection changes the CLI model for the next request, keeping active requests fixed; the public
-model ID remains claude-subscription. Runtime request counters contain no prompts.
+model ID subscription follows the selected provider; explicit provider IDs remain fixed. Runtime request counters contain no prompts.
+
+Command Code uses its official Provider API, not a CLI wrapper. It consumes GOAT plan credits and may consume user-purchased top-ups under provider billing rules. Do not promise a plan-only spending lock. Google requires official OAuth login; never add cookie adapters or API-key fallback.

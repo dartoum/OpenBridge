@@ -1,3 +1,4 @@
+import { providerModels, publicIDs, availableModels, resolveModel, runCodex, runGemini, runCommandCode } from './providers.mjs';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -10,7 +11,7 @@ export function validate(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw Error('Expected a JSON object');
   const allowed = new Set(['model', 'messages', 'stream']);
   for (const key of Object.keys(body)) if (!allowed.has(key)) throw Error(`Unsupported parameter: ${key}`);
-  if (body.model !== 'claude-subscription') throw Error('Supported model: claude-subscription');
+  if (!publicIDs.includes(body.model)) throw Error('Unsupported bridge model');
   if (body.stream !== undefined && typeof body.stream !== 'boolean') throw Error('stream must be boolean');
   if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 200) throw Error('messages must contain 1–200 text messages');
   for (const m of body.messages) {
@@ -26,7 +27,7 @@ export function runClaude(messages, signal, onText, model = 'sonnet', binary = p
     const args = ['--model', model, '-p', '--safe-mode', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-session-persistence', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--system-prompt', system || 'You are a helpful text assistant. Answer the user directly.'];
     const env = { ...process.env };
     // This adapter only uses the existing Claude account login, never API billing.
-    for (const key of Object.keys(env)) if (/^(ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDECODE$)/.test(key)) delete env[key];
+    for (const key of Object.keys(env)) if (/^(ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDECODE$|COMMAND_CODE_API_KEY$|OPENAI_|CODEX_API_KEY$|GEMINI_API_KEY$|GOOGLE_API_KEY$|BRIDGE_API_KEY$)/.test(key)) delete env[key];
     const cwd = mkdtempSync(join(tmpdir(), 'openbridge-'));
     const child = spawn(binary, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     let buffer = '', stderr = '', result, failure;
@@ -65,9 +66,19 @@ export function runClaude(messages, signal, onText, model = 'sonnet', binary = p
   });
 }
 
-export function createBridge({ key, runner = runClaude, timeout = 120000, model = process.env.CLAUDE_MODEL || 'sonnet' } = {}) {
+export function runProvider(messages, signal, emit, model, settings = {}) {
+  const provider = providerModels[model]?.provider;
+  if (provider === 'claude') return runClaude(messages, signal, emit, model);
+  if (provider === 'chatgpt') return runCodex(messages, signal, emit);
+  if (provider === 'gemini') return runGemini(messages, signal, emit, model);
+  if (provider === 'commandcode') return runCommandCode(messages, signal, emit, model, { key: settings.commandCodeKey, upstreamModel: settings.commandCodeModel });
+  throw Error('Unsupported provider');
+}
+
+export function createBridge({ key, runner = runProvider, timeout = 120000, model = process.env.CLAUDE_MODEL || 'sonnet' } = {}) {
   if (!key) throw Error('Bridge key required');
   let active = false, currentController, activeModel = null;
+  let commandCodeKey = process.env.COMMAND_CODE_API_KEY, commandCodeModel = process.env.COMMAND_CODE_MODEL || 'deepseek/deepseek-v4-flash';
   const stats = { startedAt: new Date().toISOString(), requests: 0, succeeded: 0, failed: 0, lastDurationMs: null };
   const server = http.createServer(async (req, res) => {
     const json = (status, value) => { if (!res.destroyed) { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)); } };
@@ -76,19 +87,29 @@ export function createBridge({ key, runner = runClaude, timeout = 120000, model 
     const given = Buffer.from(req.headers.authorization || '');
     const expected = Buffer.from(`Bearer ${key}`);
     if (given.length !== expected.length || !timingSafeEqual(given, expected)) return error(401, 'Invalid bridge key');
-    if (req.url === '/bridge/status' && req.method === 'GET') return json(200, { service: 'openbridge', version: 2, model, activeModel, active, ...stats });
+    if (req.url === '/bridge/status' && req.method === 'GET') return json(200, { service: 'openbridge', version: 3, model, activeModel, active, models: availableModels({ commandCodeKey }), commandCodeConfigured: Boolean(commandCodeKey), commandCodeModel, ...stats });
+    if (req.url === '/bridge/commandcode' && req.method === 'POST') {
+      try {
+        let input = '';
+        for await (const chunk of req) { input += chunk; if (Buffer.byteLength(input) > 8192) return error(413, 'Request too large'); }
+        const value = JSON.parse(input);
+        if (!value || typeof value.key !== 'string' || !value.key.trim() || value.key.length > 4096 || typeof value.model !== 'string' || !/^[a-zA-Z0-9_.:/-]{1,150}$/.test(value.model) || Object.keys(value).some(k => !['key', 'model'].includes(k))) return error(400, 'Expected API key and valid Command Code model ID');
+        commandCodeKey = value.key.trim(); commandCodeModel = value.model;
+        return json(200, { configured: true });
+      } catch { return error(400, 'Invalid Command Code settings'); }
+    }
     if (req.url === '/bridge/model' && req.method === 'POST') {
       try {
         let input = '';
         for await (const chunk of req) { input += chunk; if (Buffer.byteLength(input) > 1024) return error(413, 'Request too large'); }
         const value = JSON.parse(input);
-        if (!value || !['sonnet', 'opus', 'haiku'].includes(value.model) || Object.keys(value).length !== 1) return error(400, 'Expected model: sonnet, opus or haiku');
+        if (!value || !Object.hasOwn(providerModels, value.model) || Object.keys(value).length !== 1) return error(400, 'Unsupported model selection');
         model = value.model;
         return json(200, { model, activeModel });
       } catch { return error(400, 'Invalid model request'); }
     }
     if (req.url === '/bridge/cancel' && req.method === 'POST') { currentController?.abort(); return json(200, { cancelled: active }); }
-    if (req.url === '/v1/models' && req.method === 'GET') return json(200, { object: 'list', data: [{ id: 'claude-subscription', object: 'model', created: 0, owned_by: 'openbridge' }] });
+    if (req.url === '/v1/models' && req.method === 'GET') return json(200, { object: 'list', data: publicIDs.map(id => ({ id, object: 'model', created: 0, owned_by: 'openbridge' })) });
     if (req.url !== '/v1/chat/completions' || req.method !== 'POST') return error(404, 'Not found');
     if (active) return error(429, 'Bridge busy; retry after the current request');
     let body;
@@ -99,8 +120,8 @@ export function createBridge({ key, runner = runClaude, timeout = 120000, model 
     } catch (e) { return error(400, e.message); }
     if (active) return error(429, 'Bridge busy; retry later');
     active = true;
-    activeModel = model;
-    const requestModel = model;
+    const requestModel = resolveModel(body.model, model);
+    activeModel = requestModel;
     stats.requests++;
     const requestStarted = Date.now();
     const controller = new AbortController();
@@ -119,7 +140,7 @@ export function createBridge({ key, runner = runClaude, timeout = 120000, model 
           if (!streaming) { res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }); streaming = true; chunk({ role: 'assistant' }); }
           chunk({ content: delta });
         }
-      }, requestModel);
+      }, requestModel, { commandCodeKey, commandCodeModel });
       stats.succeeded++;
       if (body.stream) {
         if (!streaming) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); chunk({ role: 'assistant', content: result }); }

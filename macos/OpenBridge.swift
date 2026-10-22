@@ -1,4 +1,5 @@
 import AppKit
+import Security
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -74,15 +75,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.button?.title = ""
         item.button?.toolTip = "OpenBridge — \(message)"
         _ = add("OpenBridge · \(message)")
-        _ = add("Claude · \(status?["model"] as? String ?? selectedModel)")
+        _ = add(status?["model"] as? String ?? selectedModel)
         if running && child == nil { _ = add("Gestart buiten deze app") }
         menu.addItem(.separator())
         _ = add("Start bridge", action: #selector(start), enabled: !running && child == nil)
         _ = add("Stop bridge", action: #selector(stop), enabled: child != nil)
         _ = add("Annuleer aanvraag", action: #selector(cancel), enabled: busy)
         let models = NSMenu(); models.autoenablesItems = false
-        for name in ["sonnet", "opus", "haiku"] {
-            let entry = add(name.capitalized, action: #selector(selectModel(_:)), enabled: true, to: models)
+        let choices: [(String, String)] = [("sonnet", "Claude · Sonnet"), ("opus", "Claude · Opus"), ("haiku", "Claude · Haiku"), ("codex", "ChatGPT · Codex"), ("gemini-auto", "Google · Gemini Auto"), ("gemini-pro", "Google · Gemini Pro"), ("gemini-flash", "Google · Gemini Flash"), ("commandcode", "Command Code · GOAT")]
+        for (name, label) in choices {
+            let ready = name != "commandcode" || status?["commandCodeConfigured"] as? Bool == true
+            let entry = add(label + (ready ? "" : " (sleutel instellen)"), action: #selector(selectModel(_:)), enabled: ready || !running, to: models)
             entry.representedObject = name
             entry.state = name == (status?["model"] as? String ?? selectedModel) ? .on : .off
         }
@@ -98,6 +101,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = add("Kopieer API-adres", action: #selector(copyURL))
         _ = add("Kopieer API-sleutel", action: #selector(copyKey), enabled: key != nil)
         _ = add("Kopieer model-ID", action: #selector(copyModel))
+        _ = add("Command Code instellen…", action: #selector(configureCommandCode))
+        _ = add("Google aanmelden…", action: #selector(googleLogin))
         _ = add("Open handleiding", action: #selector(openDocs))
         menu.addItem(.separator())
         _ = add("Sluit OpenBridge", action: #selector(quit))
@@ -137,6 +142,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         env["CLAUDE_MODEL"] = selectedModel; env["PORT"] = "8000"
         env.removeValue(forKey: "BRIDGE_API_KEY")
         env["PATH"] = "/usr/local/bin:/opt/homebrew/bin:\(NSHomeDirectory())/.local/bin:/usr/bin:/bin"
+        if let saved = readCommandCodeKey() { env["COMMAND_CODE_API_KEY"] = saved }
+        env["COMMAND_CODE_MODEL"] = UserDefaults.standard.string(forKey: "CommandCodeModel") ?? "deepseek/deepseek-v4-flash"
         process.environment = env
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -178,14 +185,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }.resume()
     }
+    func keyQuery() -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.openbridge.commandcode", kSecAttrAccount as String: "api-key"]
+    }
+    func readCommandCodeKey() -> String? {
+        var query = keyQuery(); query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var data: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &data) == errSecSuccess, let bytes = data as? Data else { return nil }
+        return String(data: bytes, encoding: .utf8)
+    }
+    @objc func configureCommandCode() {
+        let alert = NSAlert()
+        alert.messageText = "Command Code GOAT"
+        alert.informativeText = "Gebruik je Command Code API-sleutel. Deze wordt in macOS Sleutelhanger bewaard. Aanvragen gebruiken je GOAT-tegoed; extra aangekochte credits kunnen ook worden verbruikt."
+        alert.addButton(withTitle: "Bewaar"); alert.addButton(withTitle: "Annuleer")
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 350, height: 76))
+        let secret = NSSecureTextField(frame: NSRect(x: 0, y: 44, width: 350, height: 24))
+        secret.placeholderString = "API-sleutel (leeg = bestaande behouden)"
+        let model = NSTextField(frame: NSRect(x: 0, y: 4, width: 350, height: 24))
+        model.stringValue = UserDefaults.standard.string(forKey: "CommandCodeModel") ?? "deepseek/deepseek-v4-flash"
+        view.addSubview(secret); view.addSubview(model); alert.accessoryView = view
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let value = secret.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let apiKey = value.isEmpty ? readCommandCodeKey() : value, !apiKey.isEmpty else { show("Vul een API-sleutel in."); return }
+        let modelID = model.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard modelID.range(of: "^[a-zA-Z0-9_.:/-]{1,150}$", options: .regularExpression) != nil else { show("Vul een geldig model-ID in."); return }
+        let attributes = [kSecValueData as String: Data(apiKey.utf8)] as [String: Any]
+        var result = SecItemUpdate(keyQuery() as CFDictionary, attributes as CFDictionary)
+        if result == errSecItemNotFound { var entry = keyQuery(); entry.merge(attributes) { _, new in new }; result = SecItemAdd(entry as CFDictionary, nil) }
+        guard result == errSecSuccess else { show("Opslaan in Sleutelhanger mislukt (\(result))."); return }
+        UserDefaults.standard.set(modelID, forKey: "CommandCodeModel")
+        guard status != nil, let key else { show("Bewaard. Start de bridge om Command Code te gebruiken."); return }
+        var request = URLRequest(url: URL(string: endpoint + "/bridge/commandcode")!)
+        request.httpMethod = "POST"; request.timeoutInterval = 3
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["key": apiKey, "model": modelID])
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            Task { @MainActor in
+                if (response as? HTTPURLResponse)?.statusCode == 200 { self.poll() }
+                else { self.show("Bewaard. Herstart de bridge om de instellingen te laden.") }
+            }
+        }.resume()
+    }
+    @objc func googleLogin() { NSWorkspace.shared.open(root.appendingPathComponent("scripts/google-login.command")) }
     @objc func copyConfig() {
         guard let key else { return }
-        copy("API-type: OpenAI Chat Completions\nBase URL: \(endpoint)/v1\nAPI key: \(key)\nModel: claude-subscription\n")
+        copy("API-type: OpenAI Chat Completions\nBase URL: \(endpoint)/v1\nAPI key: \(key)\nModel: subscription\n")
     }
     func copy(_ value: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value, forType: .string) }
     @objc func copyURL() { copy(endpoint + "/v1") }
     @objc func copyKey() { if let key { copy(key) } }
-    @objc func copyModel() { copy("claude-subscription") }
+    @objc func copyModel() { copy("subscription") }
     @objc func openDocs() { NSWorkspace.shared.open(root.appendingPathComponent("README.md")) }
     func show(_ text: String) { let alert = NSAlert(); alert.messageText = "OpenBridge"; alert.informativeText = text; NSApp.activate(ignoringOtherApps: true); alert.runModal() }
     @objc func quit() { NSApp.terminate(nil) }
