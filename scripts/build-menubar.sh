@@ -23,3 +23,5 @@ identity=$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Devel
 echo "Signing with: ${identity:-ad-hoc}"
 codesign --force --sign "${identity:--}" "$app_path/Contents/Resources/node"
 codesign --force --sign "${identity:--}" "$app_path"
+# Make macOS read the new icon right away instead of showing a cached one in the Dock and Finder.
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app_path" >/dev/null 2>&1 || true
