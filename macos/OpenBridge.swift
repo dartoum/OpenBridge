@@ -246,8 +246,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     if !self.hydratedKeys {
                         self.hydratedKeys = true
                         if self.child != nil {
-                            for provider in self.snapshot?.config.providers.filter({ $0.type == "openai" }) ?? [] {
-                                if let key = self.readProviderKey(provider.id) { self.uploadKey(provider.id, key) }
+                            // A Keychain prompt blocks its caller; keep it off the main thread so the app stays responsive.
+                            let ids = (self.snapshot?.config.providers.filter { $0.type == "openai" } ?? []).map(\.id)
+                            Task.detached {
+                                for id in ids {
+                                    if let key = self.readProviderKey(id) { await MainActor.run { self.uploadKey(id, key) } }
+                                }
                             }
                         }
                         self.refreshChecks()
@@ -443,8 +447,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             })
         }
     }
-    func keyQuery(_ provider: String) -> [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.openbridge.provider", kSecAttrAccount as String: provider] }
-    func readProviderKey(_ provider: String) -> String? {
+    nonisolated func keyQuery(_ provider: String) -> [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.openbridge.provider", kSecAttrAccount as String: provider] }
+    nonisolated func readProviderKey(_ provider: String) -> String? {
         var query = keyQuery(provider); query[kSecReturnData as String] = true; query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
         if SecItemCopyMatching(query as CFDictionary, &result) != errSecSuccess && provider == "commandcode" {
@@ -453,17 +457,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
         guard let data = result as? Data else { return nil }; return String(data: data, encoding: .utf8)
     }
-    func storeProviderKey(_ provider: String, _ key: String) -> Bool {
+    nonisolated func storeProviderKey(_ provider: String, _ key: String) -> Bool {
         let value = [kSecValueData as String: Data(key.trimmingCharacters(in: .whitespacesAndNewlines).utf8)]
         var code = SecItemUpdate(keyQuery(provider) as CFDictionary, value as CFDictionary)
         if code == errSecItemNotFound { var entry = keyQuery(provider); entry.merge(value) { _, new in new }; code = SecItemAdd(entry as CFDictionary, nil) }
         return code == errSecSuccess
     }
     func saveKey(_ provider: String, _ key: String, completion: @escaping (String?) -> Void) {
-        guard storeProviderKey(provider, key) else { completion("Could not save the key to Keychain."); return }
-        request("/bridge/credentials", method: "POST", body: jsonData(["providerID": provider, "key": key])) { result in
-            if case .failure(let error) = result { completion(error.localizedDescription) } else { completion(nil) }
-            self.poll()
+        Task.detached {
+            let stored = self.storeProviderKey(provider, key)
+            await MainActor.run {
+                guard stored else { completion("Could not save the key to Keychain."); return }
+                self.request("/bridge/credentials", method: "POST", body: self.jsonData(["providerID": provider, "key": key])) { result in
+                    if case .failure(let error) = result { completion(error.localizedDescription) } else { completion(nil) }
+                    self.poll()
+                }
+            }
         }
     }
     func uploadKey(_ provider: String, _ key: String) {

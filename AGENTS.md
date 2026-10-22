@@ -12,6 +12,10 @@ The app stores configuration and local bridge keys under
 `~/Library/Application Support/OpenBridge/`. First launch preserves the existing
 checkout's bridge key when available. CLI mode stores state in its cwd.
 
+Keychain calls can block on a system prompt: never make them on the main thread.
+The build signs with an Apple Development identity when one exists (ad-hoc
+otherwise) so Keychain “Always Allow” survives rebuilds.
+
 Never read or copy provider credential files; official CLIs own their account
 authentication. API-provider credentials belong in this app's own macOS Keychain
 items and the server's memory, never in config.json. No silent API-key or provider

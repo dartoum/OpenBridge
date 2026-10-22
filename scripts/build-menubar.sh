@@ -12,5 +12,8 @@ import os, plistlib
 with open('build/OpenBridge.app/Contents/Info.plist', 'wb') as f:
     plistlib.dump({'CFBundleIdentifier':'local.openbridge.menubar','CFBundleName':'OpenBridge','CFBundleExecutable':'OpenBridge','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.7.0','CFBundleDevelopmentRegion':'en','CFBundleLocalizations':['en'],'LSMinimumSystemVersion':'14.0','BridgeRoot':os.getcwd()},f)
 PY
-codesign --force --sign - "$app_path/Contents/Resources/node"
-codesign --force --sign - "$app_path"
+# A stable signing identity keeps Keychain "Always Allow" valid across rebuilds; fall back to ad-hoc signing.
+identity=$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development[^"]*\)".*/\1/p' | head -1)
+echo "Signing with: ${identity:-ad-hoc}"
+codesign --force --sign "${identity:--}" "$app_path/Contents/Resources/node"
+codesign --force --sign "${identity:--}" "$app_path"

@@ -9,7 +9,10 @@ model selection, installed CLI paths and request status.
 Requires macOS 14+, Xcode command-line tools and Node.js 22+ **to build**.
 The resulting app bundles Node and the server sources, so it no longer needs the
 checkout or a separately installed Node at runtime. The app is built for the
-host architecture and locally signed, not notarized for public distribution.
+host architecture and locally signed (with your Apple Development identity when one
+is installed, otherwise ad-hoc), not notarized for public distribution. After the
+first build with a new signature macOS asks once for Keychain access to saved API
+keys; choose **Always Allow** to be asked only again after a different signature.
 
 ```sh
 scripts/build-menubar.sh

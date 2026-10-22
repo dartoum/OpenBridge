@@ -250,6 +250,7 @@ struct ProviderDetail: View {
     @State private var fieldError: String?
     @State private var updatingCLI = false
     @State private var showAdvanced = false
+    @State private var changingKey = false
     @State private var showOlder = false
     @State private var search = ""
     @State private var newName = ""
@@ -260,6 +261,7 @@ struct ProviderDetail: View {
         _name = State(initialValue: provider.name); _baseURL = State(initialValue: provider.baseURL); _cliPath = State(initialValue: provider.cliPath)
     }
     var editable: Bool { app.snapshot != nil && !app.maintenanceRunning }
+    var keySaved: Bool { app.snapshot?.credentialProviders.contains(provider.id) == true }
     var diagnostic: DiagnosticRecord? { app.snapshot?.diagnostics.first { $0.providerID == provider.id } }
     var installed: Bool { FileManager.default.isExecutableFile(atPath: provider.cliPath) }
     var cliName: String { ["claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity"][provider.type] ?? "The CLI" }
@@ -281,7 +283,7 @@ struct ProviderDetail: View {
             guard !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             app.saveKey(provider.id, secret) { error in
                 fieldError = error
-                if error == nil { secret = "" }
+                if error == nil { secret = ""; changingKey = false }
             }
         }
     }
@@ -292,7 +294,7 @@ struct ProviderDetail: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
                         // The title is the name field: one place to read and to rename.
-                        TextField("Name", text: $name).textFieldStyle(.plain).font(.title2.bold())
+                        TextField("Name", text: $name).labelsHidden().textFieldStyle(.plain).font(.title2.bold())
                             .focused($focus, equals: .name).onSubmit { commit(.name) }.disabled(!editable)
                             .help("Click to rename")
                         Text(provider.type == "openai" ? "OpenAI-compatible API" : "Subscription").foregroundStyle(.secondary)
@@ -306,10 +308,23 @@ struct ProviderDetail: View {
             Section(provider.type == "openai" ? "Connection" : "Account") {
                 if provider.type == "openai" {
                     TextField("Base URL", text: $baseURL).focused($focus, equals: .baseURL).onSubmit { commit(.baseURL) }.disabled(!editable)
-                    SecureField(app.snapshot?.credentialProviders.contains(provider.id) == true ? "New API key (leave empty to keep)" : "API key (leave empty for local servers)", text: $secret)
-                        .focused($focus, equals: .secret).onSubmit { commit(.secret) }.disabled(!editable)
-                    Text("Press Return to store the key in macOS Keychain. Other apps use the separate bridge key.").font(secondaryFont).foregroundStyle(.secondary)
-                    if provider.id == "commandcode" { Text("Requests use your plan allowance and any purchased extra credits.").font(secondaryFont).foregroundStyle(.secondary) }
+                    LabeledContent("API key") {
+                        if keySaved && !changingKey {
+                            HStack(spacing: 10) {
+                                Label("Saved in Keychain", systemImage: "checkmark.circle").foregroundStyle(.secondary)
+                                Button("Change…") { changingKey = true }.disabled(!editable)
+                            }
+                        } else {
+                            HStack(spacing: 8) {
+                                SecureField("Paste key", text: $secret).labelsHidden().textFieldStyle(.roundedBorder).frame(minWidth: 180)
+                                    .focused($focus, equals: .secret).onSubmit { commit(.secret) }
+                                if keySaved { Button("Cancel") { secret = ""; changingKey = false } }
+                                Button("Save") { commit(.secret) }.disabled(secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !editable)
+                            }
+                        }
+                    }
+                    if !keySaved { Text("Not needed for a server on this Mac, such as LM Studio or Ollama.").font(secondaryFont).foregroundStyle(.secondary) }
+                    if provider.id == "commandcode" { Text("Usage counts against your Command Code plan and any extra credits you bought.").font(secondaryFont).foregroundStyle(.secondary) }
                 } else if installed {
                     LabeledContent("Version", value: diagnostic.map { $0.version.isEmpty ? "Unknown" : $0.version } ?? "Checking…")
                     if let diagnostic { LabeledContent("Account", value: diagnostic.auth) }
