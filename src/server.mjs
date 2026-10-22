@@ -21,13 +21,24 @@ export function validate(body) {
   }
   for (const name of ['max_tokens', 'max_completion_tokens']) if (body[name] !== undefined && (!Number.isInteger(body[name]) || body[name] < 1)) throw Error(`${name} must be a positive integer`);
   if (body.tools !== undefined && !Array.isArray(body.tools)) throw Error('tools must be an array');
+  if(body.response_format!==undefined){
+    const format=body.response_format;
+    if(!format||!['text','json_object','json_schema'].includes(format.type)) throw Error('Invalid response_format type');
+    if(format.type==='json_schema'&&(!format.json_schema?.schema||typeof format.json_schema.schema!=='object'||Array.isArray(format.json_schema.schema))) throw Error('response_format.json_schema.schema must be a JSON Schema object');
+  }
   return body;
 }
 
-export function runClaude(messages, signal, onText, model = 'sonnet', binary = process.env.CLAUDE_BIN || join(homedir(), '.local/bin/claude')) {
+
+export function runClaude(messages, signal, onText, model = 'sonnet', binary = process.env.CLAUDE_BIN || join(homedir(), '.local/bin/claude'), options = {}, onModel = () => {}) {
   return new Promise((resolve, reject) => {
+    const format=options.response_format;
+    const structured=format && format.type!=='text';
     const system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
     const args = ['--model', model, '-p', '--safe-mode', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-session-persistence', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--system-prompt', system || 'You are a helpful text assistant. Answer the user directly.'];
+    if(format?.type==='json_schema') args.push('--json-schema',JSON.stringify(format.json_schema.schema));
+    if(format?.type==='json_object') args[args.length-1]+='\nReturn only a valid JSON object, without markdown fences or commentary.';
+    if(args.some(value=>Buffer.byteLength(value)>96*1024)) {reject(Error('Claude argument exceeds 96 KiB limit'));return;}
     const env = { ...process.env };
     // This adapter only uses the existing Claude account login, never API billing.
     for (const key of Object.keys(env)) if (/^(ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDECODE$|COMMAND_CODE_API_KEY$|OPENAI_|CODEX_API_KEY$|GEMINI_API_KEY$|GOOGLE_API_KEY$|BRIDGE_API_KEY$)/.test(key)) delete env[key];
@@ -43,7 +54,8 @@ export function runClaude(messages, signal, onText, model = 'sonnet', binary = p
       if (!text.trim()) return;
       try {
         const event = JSON.parse(text);
-        if (event.type === 'stream_event' && event.event?.delta?.type === 'text_delta') onText(event.event.delta.text);
+        if(event.type==='system'&&event.subtype==='init'&&typeof event.model==='string') onModel(event.model);
+        if (!structured && event.type === 'stream_event' && event.event?.delta?.type === 'text_delta') onText(event.event.delta.text);
         if (event.type === 'result') result = event;
       } catch { failure = Error('Invalid CLI event'); stop(); }
     };
@@ -64,14 +76,20 @@ export function runClaude(messages, signal, onText, model = 'sonnet', binary = p
       if (signal.aborted) reject(Error('Request cancelled or timed out'));
       else if (failure) reject(failure);
       else if (code !== 0 || !result || result.is_error) reject(Error(`Claude failed (${code}): ${String(result?.result || stderr || 'No result').slice(0, 1000)}`));
-      else resolve(result.result || '');
+      else if(structured){
+        try{
+          const value=format.type==='json_schema'?result.structured_output:JSON.parse(result.result);
+          if(value===undefined || (format.type==='json_object'&&(value===null||typeof value!=='object'||Array.isArray(value)))) throw Error('Missing JSON output');
+          const output=JSON.stringify(value);onText(output);resolve(output);
+        }catch{reject(Error('Claude did not return valid structured output'));}
+      }else resolve(result.result || '');
     });
   });
 }
 
 export function runProvider(messages,signal,emit,id,settings={}) {
   const {provider,modelSpec}=settings;
-  if(provider.type==='claude') return runClaude(messages,signal,emit,modelSpec.upstreamModel,provider.cliPath);
+  if(provider.type==='claude') return runClaude(messages,signal,emit,modelSpec.upstreamModel,provider.cliPath,settings.options,settings.onModel);
   if(provider.type==='codex') return runCodex(messages,signal,emit,modelSpec.upstreamModel,provider.cliPath);
   if(provider.type==='antigravity') return runAntigravity(messages,signal,emit,modelSpec.upstreamModel,provider.cliPath);
   if(provider.type==='openai') return runCommandCode(messages,signal,emit,id,{key:settings.apiKey,upstreamModel:modelSpec.upstreamModel,baseURL:provider.baseURL,allowNoKey:provider.id!=='commandcode'});
@@ -100,7 +118,7 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
     const given=Buffer.from(req.headers.authorization||''),expected=Buffer.from(`Bearer ${requiredKey}`);
     if(given.length!==expected.length||!timingSafeEqual(given,expected)) return error(401,'Invalid bridge key');
     try {
-      if(req.url==='/bridge/status'&&req.method==='GET') return json(200,{service:'openbridge',version:5,model:config.selectedModel,selectedModelID:config.selectedModel,activeModel,active,models:catalog(config),config,diagnostics:cachedDiagnostics,checks,runtime:{version:process.version,path:process.execPath},credentialProviders:Object.keys(secrets),...stats});
+      if(req.url==='/bridge/status'&&req.method==='GET') return json(200,{service:'openbridge',version:6,model:config.selectedModel,selectedModelID:config.selectedModel,activeModel,active,models:catalog(config),config,diagnostics:cachedDiagnostics,checks,runtime:{version:process.version,path:process.execPath},credentialProviders:Object.keys(secrets),...stats});
       if(req.url==='/bridge/config'&&req.method==='PUT') {
         const next=validateConfig(await readJSON(req));
         const changed=new Set(config.providers.filter(p=>JSON.stringify(p)!==JSON.stringify(next.providers.find(n=>n.id===p.id))).map(p=>p.id));
@@ -136,10 +154,11 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
       if(!selected) return error(400,'Model unknown or disabled');
       const provider=structuredClone(config.providers.find(p=>p.id===selected.providerID));
       const spec=structuredClone(selected);
-      const settings={provider,modelSpec:spec,apiKey:secrets[provider.id],commandCodeKey:secrets.commandcode,commandCodeModel:spec.upstreamModel};
+      let resolvedModel;
+      const settings={provider,modelSpec:spec,options:body,onModel:value=>{resolvedModel=value;},apiKey:secrets[provider.id],commandCodeKey:secrets.commandcode,commandCodeModel:spec.upstreamModel};
       if (provider.type !== 'openai') {
-        const unsupported = Object.keys(body).filter(k => !['model','messages','stream','tools','tool_choice'].includes(k));
-        if (unsupported.length || body.tools?.length || (body.tool_choice && body.tool_choice !== 'none') || body.messages.some(m => m.role === 'tool' || m.tool_calls)) return error(422, `${provider.name} CLI supports text chat only. Unsupported options: ${unsupported.join(', ') || 'function calling'}. Use an OpenAI-compatible API provider for these features.`);
+        const unsupported = Object.keys(body).filter(k => !['model','messages','stream','tools','tool_choice',...(provider.type==='claude'||body.response_format?.type==='text'?['response_format']:[])].includes(k));
+        if (unsupported.length || body.tools?.length || (body.tool_choice && body.tool_choice !== 'none') || body.messages.some(m => m.role === 'tool' || m.tool_calls)) return error(422, `${provider.name} CLI does not support these options: ${unsupported.join(', ') || 'function calling'}. Use an OpenAI-compatible API provider for these features.`);
         body.messages = body.messages.map(m => ({role:m.role === 'developer' ? 'system' : m.role, content:Array.isArray(m.content) ? m.content.map(p=>p.text).join('') : m.content}));
       }
       active=true;activeModel=spec.id;stats.requests++;
@@ -182,14 +201,14 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
           } else {
             const value=await upstream.json();value.model=spec.id;json(200,value);
           }
-          stats.succeeded++;checks[spec.id]={success:true,at:new Date().toISOString(),durationMs:Date.now()-started};
+          stats.succeeded++;checks[spec.id]={success:true,at:new Date().toISOString(),durationMs:Date.now()-started,...(resolvedModel?{resolvedModel}:{})};
           return;
         }
         const result=await runner(body.messages,controller.signal,delta=>{
           text+=delta;if(text.length>2*1024*1024){controller.abort();return;}
           if(body.stream&&!res.destroyed){if(!streaming){res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache'});streaming=true;chunk({role:'assistant'});}chunk({content:delta});}
         },spec.id,settings);
-        stats.succeeded++;checks[spec.id]={success:true,at:new Date().toISOString(),durationMs:Date.now()-started};
+        stats.succeeded++;checks[spec.id]={success:true,at:new Date().toISOString(),durationMs:Date.now()-started,...(resolvedModel?{resolvedModel}:{})};
         if(body.stream){if(!streaming){res.writeHead(200,{'Content-Type':'text/event-stream'});chunk({role:'assistant',content:result});}chunk({},'stop');res.end('data: [DONE]\n\n');}
         else json(200,{id,object:'chat.completion',created,model:spec.id,choices:[{index:0,message:{role:'assistant',content:result},finish_reason:'stop'}]});
       }catch(e){

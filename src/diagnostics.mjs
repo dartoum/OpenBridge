@@ -1,3 +1,4 @@
+import {discoverClaude,discoverCodex} from './model-discovery.mjs';
 import { accessSync, constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -18,13 +19,15 @@ export async function diagnostics(config, secrets) {
   }));
 }
 export async function discoverModels(provider, key, signal) {
+  if(provider.type==='claude') return discoverClaude(provider,signal);
+  if(provider.type==='codex') return discoverCodex(provider,signal);
   if(provider.type==='antigravity') {
     const result=await execute(provider.cliPath,['models'],{timeout:15000,maxBuffer:256*1024,signal});
     return result.stdout.split('\n').filter(line=>line.includes('\t')).map(line=>{const [id,...name]=line.split('\t');return {id, name:name.join(' ').trim()||id};}).filter(m=>/^[a-zA-Z0-9_.:/-]{1,180}$/.test(m.id));
   }
   if(provider.type==='openai') {
     const response=await fetch(provider.baseURL+'/models',{headers:key?{Authorization:`Bearer ${key}`}:{},signal,redirect:'error'});
-    if(!response.ok) {await response.body?.cancel();throw Error(`Fetch models mislukt (HTTP ${response.status})`);}
+    if(!response.ok) {await response.body?.cancel();throw Error(`Could not fetch models (HTTP ${response.status})`);}
     const text=await response.text(); if(text.length>2*1024*1024) throw Error('Model response too large');
     const result=JSON.parse(text);
     return (result.data||[]).filter(m=>typeof m.id==='string'&&/^[a-zA-Z0-9_.:/-]{1,180}$/.test(m.id)).slice(0,300).map(m=>({id:m.id,name:m.name||m.id}));

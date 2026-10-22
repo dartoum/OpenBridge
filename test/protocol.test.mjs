@@ -26,14 +26,14 @@ test('native API preserves content arrays, generation options, tool cycles and f
  const config=defaultConfig();config.providers.push({id:'fixture',name:'Fixture',type:'openai',enabled:true,cliPath:'',baseURL:upstreamURL,models:[{id:'fixture/model',name:'Fixture',upstreamModel:'upstream',enabled:true}]});
  const bridge=createBridge({key:'test',config});const base=await listen(bridge);t.after(()=>bridge.close());
  const post=body=>fetch(base+'/v1/chat/completions',{method:'POST',headers:{Authorization:'Bearer test','Content-Type':'application/json'},body:JSON.stringify(body)});
- const body={model:'fixture/model',messages:[{role:'user',content:[{type:'text',text:'Weather?'}]}],max_tokens:128,temperature:0,tools:[{type:'function',function:{name:'weather',parameters:{type:'object',properties:{city:{type:'string'}}}}}],tool_choice:'auto'};
+ const body={model:'fixture/model',messages:[{role:'user',content:[{type:'text',text:'Weather?'}]}],max_tokens:128,temperature:0,response_format:{type:'json_object'},tools:[{type:'function',function:{name:'weather',parameters:{type:'object',properties:{city:{type:'string'}}}}}],tool_choice:'auto'};
  const result=await(await post(body)).json();assert.deepEqual(result.choices[0].message.tool_calls,[tool]);assert.equal(result.model,'fixture/model');assert.equal(result.usage.completion_tokens,12);assert.deepEqual(received[0],{...body,model:'upstream'});
  const continuation={...body,messages:[...body.messages,result.choices[0].message,{role:'tool',tool_call_id:'call_1',content:'Sunny'}]};
  assert.equal((await(await post(continuation)).json()).choices[0].message.content,'Sunny');
  const stream=await(await post({...body,stream:true,stream_options:{include_usage:true}})).text();
  const frames=stream.split('\n').filter(l=>l.startsWith('data: ')&&!l.includes('[DONE]')).map(l=>JSON.parse(l.slice(6)));
  assert.equal(frames[0].choices[0].delta.tool_calls[0].function.name,'weather');assert.equal(frames[1].choices[0].finish_reason,'tool_calls');assert.equal(frames[2].usage.completion_tokens,12);assert.match(stream,/\[DONE\]/);
- const unsupported=await post({...body,model:'claude/sonnet'});assert.equal(unsupported.status,422);assert.match((await unsupported.json()).error.message,/CLI supports text chat only/);
+ const unsupported=await post({...body,model:'claude/sonnet'});assert.equal(unsupported.status,422);assert.match((await unsupported.json()).error.message,/CLI does not support these options/);
  const truncated=await(await post({...body,stream:true,messages:[{role:'user',content:'truncated'}]})).text();assert.match(truncated,/ended before/);assert.doesNotMatch(truncated,/data: \[DONE\]/);
  const status=await(await fetch(base+'/bridge/status',{headers:{Authorization:'Bearer test'}})).json();assert.equal(status.succeeded,3);assert.equal(status.failed,1);assert.equal(status.active,false);
 });

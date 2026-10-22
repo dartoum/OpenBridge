@@ -29,7 +29,9 @@ export function validateConfig(value) {
     if (p.type==='openai') p.baseURL=validBaseURL(p.baseURL);
     else if (!p.cliPath.startsWith('/') || p.cliPath.length>2048) throw Error('CLI path must be absolute');
     for (const m of p.models) {
-      if (!m || typeof m.id!=='string' || !m.id.startsWith(p.id+'/') || !/^[a-zA-Z0-9_.:/-]{1,220}$/.test(m.id) || models.has(m.id) || typeof m.upstreamModel!=='string' || !/^[a-zA-Z0-9_.:/-]{1,180}$/.test(m.upstreamModel) || typeof m.name!=='string' || !m.name.trim() || m.name.length>180 || typeof m.enabled!=='boolean' || Object.keys(m).some(k=>!['id','upstreamModel','name','enabled'].includes(k))) throw Error('Invalid or duplicate model');
+      if (!m || typeof m.id!=='string' || !m.id.startsWith(p.id+'/') || !/^[a-zA-Z0-9_.:/-]{1,220}$/.test(m.id) || models.has(m.id) || typeof m.upstreamModel!=='string' || !/^[a-zA-Z0-9_.:/-]{1,180}$/.test(m.upstreamModel) || typeof m.name!=='string' || !m.name.trim() || m.name.length>180 || typeof m.enabled!=='boolean' || Object.keys(m).some(k=>!['id','upstreamModel','name','enabled','source','resolvedModel'].includes(k))) throw Error('Invalid or duplicate model');
+      if(m.source!==undefined&&(typeof m.source!=='string'||m.source.length>160)) throw Error('Invalid model source');
+      if(m.resolvedModel!==undefined&&(typeof m.resolvedModel!=='string'||m.resolvedModel.length>220)) throw Error('Invalid resolved model');
       models.add(m.id);
     }
   }

@@ -10,8 +10,8 @@
 - Clean-Mac acceptance: bundled Node, missing CLI diagnostics, install/login flow,
   migrated/local API keys, configuration persistence. Current build is local,
   architecture-specific and not notarized.
-- Native model catalogue discovery for Claude/Codex if they expose stable APIs;
-  current GUI supports explicit manual model IDs.
+- Check catalogue discovery on older CLI versions; control protocol and Codex
+  debug models are version-dependent. Manual model IDs remain available.
 - Live GOAT/OpenCode function-calling acceptance after a key is configured.
   Local native API protocol fixtures pass; CLI adapters remain text-only.
 - Images and Responses API remain unsupported.

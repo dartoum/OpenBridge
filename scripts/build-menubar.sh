@@ -10,7 +10,7 @@ cp README.md "$app_path/Contents/Resources/bridge/"
 python3 - <<'PY'
 import os, plistlib
 with open('build/OpenBridge.app/Contents/Info.plist', 'wb') as f:
-    plistlib.dump({'CFBundleIdentifier':'local.openbridge.menubar','CFBundleName':'OpenBridge','CFBundleExecutable':'OpenBridge','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.5.0','CFBundleDevelopmentRegion':'en','CFBundleLocalizations':['en'],'LSMinimumSystemVersion':'14.0','LSUIElement':True,'BridgeRoot':os.getcwd()},f)
+    plistlib.dump({'CFBundleIdentifier':'local.openbridge.menubar','CFBundleName':'OpenBridge','CFBundleExecutable':'OpenBridge','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.6.0','CFBundleDevelopmentRegion':'en','CFBundleLocalizations':['en'],'LSMinimumSystemVersion':'14.0','LSUIElement':True,'BridgeRoot':os.getcwd()},f)
 PY
 codesign --force --sign - "$app_path/Contents/Resources/node"
 codesign --force --sign - "$app_path"

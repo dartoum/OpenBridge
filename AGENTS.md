@@ -25,7 +25,9 @@ absolute executable paths; never interpolate user input into a shell command.
 
 ## Models and lifecycle
 
-Concrete API IDs such as `claude/sonnet` always address that configured model.
+Provider-prefixed API IDs always address that configured upstream ID. Family
+IDs such as `claude/haiku` still resolve through the CLI alias; version IDs such
+as `claude/claude-haiku-5-5` pin a version. Never imply that aliases are pinned.
 `subscription` is an explicit optional alias following the current selection.
 Legacy provider aliases remain accepted for existing clients but are not listed.
 Disabled models/providers must be absent from `/v1/models` AND refused on direct
@@ -56,11 +58,19 @@ Never commit keys, provider credentials, prompts, response logs or build output.
 
 API-provider requests use native Chat Completions forwarding: preserve tools,
 message arrays, tool results, finish reasons and upstream usage in JSON and SSE.
-Clients execute API functions; never execute them in the bridge. CLI adapters
-normalize text arrays and explicitly reject unsupported controls/functions with
-422. Do not silently discard options or imply CLI parity with API providers.
+Clients execute API functions; never execute them in the bridge. CLI adapters normalize text arrays. Claude additionally maps response_format
+json_schema to --json-schema and validates json_object responses. Buffer
+structured replies, never stream unstructured preamble. Other unsupported
+controls/functions return 422. Do not silently discard options or imply CLI parity with API providers.
 
 All shipped UI/diagnostic text is English. Preserve user-provided names. Keep
 main text at 14pt and secondary text at least 13pt. Bound notifications to the
 detail column and put full technical errors in selectable, copyable details;
 never allow an unbroken error or model ID to determine window width.
+
+Model discovery is explicit, never automatic inference. Claude uses the CLI
+initialize control response plus public models.dev metadata (no credentials);
+Codex uses its CLI catalogue; API providers use their own /models. Preserve
+existing enabled flags and names, add new IDs disabled, and expose source and
+alias resolution. Public/catalogue presence is not account access. CLI init
+model metadata is the source of served-model identity, not model self-report.

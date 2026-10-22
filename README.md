@@ -35,7 +35,8 @@ No Command Code CLI is required. GOAT usage is metered against plan credits;
 provider rules may also consume purchased top-ups. OpenBridge buys nothing and
 cannot enforce a provider-side plan-only spending lock.
 
-Models can be added manually. API and Antigravity model discovery are supported;
+Models can be added manually or searched after **Fetch models**. Claude, Codex,
+API and Antigravity model discovery are supported;
 newly discovered models are initially off. Changes require **Save changes**.
 Disabled models disappear from the API model list and are refused by direct ID.
 A configuration change does not alter an already-running request.
@@ -55,7 +56,9 @@ connection details.
 
 Full endpoint if requested: `http://127.0.0.1:8000/v1/chat/completions`.
 **Copy model ID** now copies the actual selection, not the generic alias.
-A project's concrete ID stays on that model when the GUI selection changes.
+A provider-prefixed ID stays on that configured upstream ID when GUI selection
+changes. Family aliases such as `claude/haiku` follow the CLI's version mapping;
+use a version ID such as `claude/claude-haiku-5-5` to pin a version.
 The optional `subscription` alias follows the selection for future calls.
 
 Default examples:
@@ -96,8 +99,11 @@ are accepted. JSON responses and SSE preserve tool calls, argument fragments,
 finish reasons and actual upstream usage. Your client executes functions;
 OpenBridge never executes API tool calls. Upstream model support still applies.
 
-CLI providers accept plain text and arrays of text parts. They do not support
-function calling or generation controls in this adapter: these return HTTP 422
+CLI providers accept plain text and arrays of text parts. Claude also accepts
+`response_format` with `text`, `json_object` or `json_schema`. JSON Schema uses
+the CLI’s `--json-schema` and `structured_output`; JSON-object mode checks the
+complete reply before delivery. Structured replies are buffered, including SSE.
+CLI providers do not support function calling or token limits in this adapter: these return HTTP 422
 with the provider and unsupported options, rather than silently ignoring them.
 Images, embeddings and Responses API are not implemented. Browser origins are
 blocked; call from a backend on this Mac. One request at a time (429 while busy),
@@ -127,7 +133,7 @@ BRIDGE_KEY_FILE="$HOME/Library/Application Support/OpenBridge/.bridge-key" \
   BRIDGE_MODEL=claude/sonnet node scripts/smoke.mjs --stream
 ```
 
-Sixteen fixture-backed tests cover routing, config persistence, disabled models,
+Nineteen fixture-backed tests cover routing, config persistence, disabled models,
 authentication, admin separation, SSE, cancellation and errors. GUI acceptance
 verified the window, real copy/paste of `claude/sonnet`, live Claude testing, and
 adding/testing/disabling a temporary local API provider. The disabled model was
@@ -144,3 +150,20 @@ Sources: [Google transition](https://developers.googleblog.com/an-important-upda
 The protocol fixture additionally verifies text arrays, token limits, a complete
 function-call/result cycle, fragmented SSE tool arguments, usage frames and a
 truncated stream. This is local protocol evidence, not a live GOAT/OpenCode run.
+
+## Catalogue sources and model identity
+
+Claude Fetch models initializes the official CLI without sending a user prompt.
+It combines the CLI catalogue and resolved aliases with public Anthropic entries
+from models.dev. Public entries are labelled **public catalogue**. Account access is unverified
+until a successful request; catalogue entries are not subscription entitlements. Codex Fetch models uses `codex debug models`;
+API providers query their configured /models, and Google uses `agy models`.
+No API-provider key or account token is sent to models.dev. Fetch errors retain
+existing configuration. Existing names/enabled flags survive refresh; new entries
+start disabled. Save toggle changes before refreshing. Search by name or ID.
+
+On this Mac, Claude 2.1.286’s catalogue resolves `haiku` to
+`claude-haiku-4-5-20251001`. A separate real CLI smoke using explicit
+`claude-haiku-5-5` and a JSON schema succeeded and its init metadata identified
+Haiku 5.5. Successful CLI checks now show the served-model metadata. This is
+machine/account-specific evidence, not a claim about every subscription.

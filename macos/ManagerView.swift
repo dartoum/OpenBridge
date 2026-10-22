@@ -5,6 +5,8 @@ struct ModelRecord: Codable, Identifiable, Equatable {
     var upstreamModel: String
     var name: String
     var enabled: Bool
+    var source: String?
+    var resolvedModel: String?
 }
 struct ProviderRecord: Codable, Identifiable, Equatable {
     var id: String
@@ -35,6 +37,7 @@ struct RequestCheck: Codable {
     var at: String
     var durationMs: Int
     var message: String?
+    var resolvedModel: String?
 }
 struct RuntimeRecord: Codable { var version: String; var path: String }
 struct BridgeSnapshot: Codable {
@@ -143,14 +146,14 @@ struct Overview: View {
                     if snapshot.active {
                         HStack { ProgressView().controlSize(.small); Text("Running \(snapshot.activeModel ?? "request")"); Spacer(); Button("Cancel") { app.cancel() } }
                     }
-                    Text("This ID always selects this model. The optional ‘subscription’ alias follows your selection in this app.").font(.system(size: 13)).foregroundStyle(.secondary)
+                    Text("Version IDs pin a model version. Family IDs such as ‘claude/haiku’ follow the CLI alias. ‘subscription’ follows your selection in this app.").font(.system(size: 13)).foregroundStyle(.secondary)
                 }
             }
             Section("Connect from another app") {
                 LabeledContent("API type", value: "OpenAI Chat Completions")
                 LabeledContent("Base URL") { Text(app.endpoint + "/v1").textSelection(.enabled); Button("Copy") { app.copyURL() } }
                 LabeledContent("API key") { Text("Local bridge key").foregroundStyle(.secondary); Button("Copy") { app.copyKey() } }
-                Text("Use from apps on this Mac. API providers support function calling and token limits. CLI providers support text chat and text arrays; other options return an explicit error.").font(.system(size: 13)).foregroundStyle(.secondary)
+                Text("Use from apps on this Mac. API providers support function calling and token limits. Claude also supports JSON output. Other CLI capabilities vary; see the provider page.").font(.system(size: 13)).foregroundStyle(.secondary)
             }
             Section("Installation") {
                 LabeledContent("Node.js", value: app.snapshot?.runtime.version ?? (FileManager.default.isExecutableFile(atPath: app.node) ? "Bundled" : "Missing"))
@@ -179,6 +182,7 @@ struct ProviderDetail: View {
     let provider: ProviderRecord
     @State private var draft: ProviderRecord
     @State private var secret = ""
+    @State private var search = ""
     @State private var modelName = ""
     @State private var upstream = ""
     init(app: AppDelegate, provider: ProviderRecord) { self.app = app; self.provider = provider; _draft = State(initialValue: provider) }
@@ -214,11 +218,19 @@ struct ProviderDetail: View {
                 }
             }
             Section("Capabilities") {
-                Text(provider.type == "openai" ? "Text arrays, generation options and function calling are forwarded to this API. Availability depends on the upstream model. Your client executes tool calls." : "Text chat and text content arrays. Function calling and generation controls are unavailable through this CLI adapter.")
+                Text(provider.type == "openai" ? "Text arrays, generation options and function calling are forwarded to this API. Availability depends on the upstream model. Your client executes tool calls." : provider.type == "claude" ? "Text chat, text arrays, JSON objects and JSON Schema output. Structured responses are buffered until validated. Function calling and token limits are unavailable through this adapter." : "Text chat and text content arrays. Function calling and generation controls are unavailable through this CLI adapter.")
                     .foregroundStyle(.secondary)
             }
             Section("Models") {
+                HStack {
+                    TextField("Search models", text: $search)
+                    Button(app.discovering ? "Fetching…" : "Fetch models") { app.discover(provider.id) }
+                        .disabled(app.discovering || app.saving || draft != provider)
+                }
+                Text("New models stay off until enabled and saved. Catalogue entries do not guarantee account access.")
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
                 ForEach($draft.models) { $model in
+                    if search.isEmpty || (model.name + " " + model.id).localizedCaseInsensitiveContains(search) {
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
                             Toggle(isOn: $model.enabled) { VStack(alignment: .leading) { Text(model.name).lineLimit(2); Text(model.id).lineLimit(2).truncationMode(.middle).font(.system(size: 13, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled) } }
@@ -226,7 +238,12 @@ struct ProviderDetail: View {
                             Button { app.copy(model.id) } label: { Image(systemName: "doc.on.doc") }.help("Copy this model ID")
                             Button("Test") { app.testModel(model.id) }.disabled(!provider.enabled || !provider.models.contains(where: { $0.id == model.id && $0.enabled }) || app.snapshot?.active == true || app.testingModel != nil)
                         }
+                        if let source = model.source { Text(source.replacingOccurrences(of: "access unverified", with: "public catalogue")).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(2) }
+                        if let resolved = model.resolvedModel, resolved != model.upstreamModel {
+                            Text("CLI alias resolves to: \(resolved)").font(.system(size: 13, design: .monospaced)).foregroundStyle(.secondary).lineLimit(2)
+                        }
                         if let check = app.snapshot?.checks[model.id] {
+                            if let resolved = check.resolvedModel { Text("Served model: \(resolved)").font(.system(size: 13, design: .monospaced)).foregroundStyle(.secondary).lineLimit(2) }
                             HStack {
                                 Text(check.success ? "Successful request · \(check.at)" : "Request failed")
                                     .font(.system(size: 13)).foregroundStyle(check.success ? Color.secondary : .orange)
@@ -235,6 +252,7 @@ struct ProviderDetail: View {
                             }
                         } else { Text(app.testingModel == model.id ? "Test request running…" : "No successful test yet").font(.system(size: 13)).foregroundStyle(.secondary) }
                     }.padding(.vertical, 4)
+                    }
                 }
                 HStack {
                     TextField("Model name", text: $modelName)
@@ -244,10 +262,7 @@ struct ProviderDetail: View {
                         if !upstream.isEmpty && !draft.models.contains(where: { $0.id == id }) { draft.models.append(ModelRecord(id: id, upstreamModel: upstream, name: modelName.isEmpty ? upstream : modelName, enabled: false)); modelName = ""; upstream = "" }
                     }.disabled(upstream.isEmpty)
                 }
-                if provider.type == "antigravity" || provider.type == "openai" {
-                    Button("Fetch models") { app.discover(provider.id) }.disabled(app.discovering)
-                    Text("Newly discovered models stay disabled until you enable them. Save changes before fetching models.").font(.system(size: 13)).foregroundStyle(.secondary)
-                }
+
                 Text("Disabled models are unavailable through the API. A test uses your account allowance.").font(.system(size: 13)).foregroundStyle(.secondary)
             }
             Section {

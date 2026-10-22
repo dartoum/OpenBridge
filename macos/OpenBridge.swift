@@ -233,9 +233,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 for row in rows {
                     guard let upstream = row["id"] else { continue }
                     let id = providerID + "/" + upstream
-                    if !provider.models.contains(where: { $0.id == id }) { provider.models.append(ModelRecord(id: id, upstreamModel: upstream, name: row["name"] ?? upstream, enabled: false)); count += 1 }
+                    if let index = provider.models.firstIndex(where: { $0.id == id }) {
+                        provider.models[index].source = row["source"] ?? (provider.type == "openai" ? "Provider API" : "Provider CLI")
+                        provider.models[index].resolvedModel = row["resolvedModel"]
+                    } else {
+                        provider.models.append(ModelRecord(id: id, upstreamModel: upstream, name: row["name"] ?? upstream, enabled: false, source: row["source"] ?? (provider.type == "openai" ? "Provider API" : "Provider CLI"), resolvedModel: row["resolvedModel"]))
+                        count += 1
+                    }
                 }
-                if count > 0 { self.saveProvider(provider, secret: "") } else { self.feedback = "No new models found." }
+                self.saveProvider(provider, secret: "") { success in
+                    if success { self.feedback = "Fetched \(rows.count) models; \(count) new models added, disabled. Existing selections were kept." }
+                }
             } catch { self.feedback = error.localizedDescription }
         }
     }
