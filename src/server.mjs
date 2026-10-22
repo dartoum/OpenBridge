@@ -23,7 +23,7 @@ export function validate(body) {
 export function runClaude(messages, signal, onText, binary = process.env.CLAUDE_BIN || join(homedir(), '.local/bin/claude')) {
   return new Promise((resolve, reject) => {
     const system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
-    const args = ['-p', '--safe-mode', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-session-persistence', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--system-prompt', system || 'You are a helpful text assistant. Answer the user directly.'];
+    const args = ['--model', process.env.CLAUDE_MODEL || 'sonnet', '-p', '--safe-mode', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-session-persistence', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--system-prompt', system || 'You are a helpful text assistant. Answer the user directly.'];
     const env = { ...process.env };
     // This adapter only uses the existing Claude account login, never API billing.
     for (const key of Object.keys(env)) if (/^(ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDECODE$)/.test(key)) delete env[key];
@@ -65,16 +65,19 @@ export function runClaude(messages, signal, onText, binary = process.env.CLAUDE_
   });
 }
 
-export function createBridge({ key, runner = runClaude, timeout = 120000 } = {}) {
+export function createBridge({ key, runner = runClaude, timeout = 120000, model = process.env.CLAUDE_MODEL || 'sonnet' } = {}) {
   if (!key) throw Error('Bridge key required');
-  let active = false;
-  return http.createServer(async (req, res) => {
+  let active = false, currentController;
+  const stats = { startedAt: new Date().toISOString(), requests: 0, succeeded: 0, failed: 0, lastDurationMs: null };
+  const server = http.createServer(async (req, res) => {
     const json = (status, value) => { if (!res.destroyed) { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)); } };
     const error = (status, message) => json(status, { error: { message, type: 'bridge_error' } });
     if (req.headers.origin) return error(403, 'Browser origins are disabled; call from your application backend');
     const given = Buffer.from(req.headers.authorization || '');
     const expected = Buffer.from(`Bearer ${key}`);
     if (given.length !== expected.length || !timingSafeEqual(given, expected)) return error(401, 'Invalid bridge key');
+    if (req.url === '/bridge/status' && req.method === 'GET') return json(200, { service: 'openbridge', version: 1, model, active, ...stats });
+    if (req.url === '/bridge/cancel' && req.method === 'POST') { currentController?.abort(); return json(200, { cancelled: active }); }
     if (req.url === '/v1/models' && req.method === 'GET') return json(200, { object: 'list', data: [{ id: 'claude-subscription', object: 'model', created: 0, owned_by: 'openbridge' }] });
     if (req.url !== '/v1/chat/completions' || req.method !== 'POST') return error(404, 'Not found');
     if (active) return error(429, 'Bridge busy; retry after the current request');
@@ -86,7 +89,10 @@ export function createBridge({ key, runner = runClaude, timeout = 120000 } = {})
     } catch (e) { return error(400, e.message); }
     if (active) return error(429, 'Bridge busy; retry later');
     active = true;
+    stats.requests++;
+    const requestStarted = Date.now();
     const controller = new AbortController();
+    currentController = controller;
     const timer = setTimeout(() => controller.abort(), timeout);
     res.on('close', () => controller.abort());
     const id = `chatcmpl-${randomUUID()}`, created = Math.floor(Date.now() / 1000);
@@ -102,15 +108,19 @@ export function createBridge({ key, runner = runClaude, timeout = 120000 } = {})
           chunk({ content: delta });
         }
       });
+      stats.succeeded++;
       if (body.stream) {
         if (!streaming) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); chunk({ role: 'assistant', content: result }); }
         chunk({}, 'stop'); res.end('data: [DONE]\n\n');
       } else json(200, { id, object: 'chat.completion', created, model: body.model, choices: [{ index: 0, message: { role: 'assistant', content: result }, finish_reason: 'stop' }] });
     } catch (e) {
+      stats.failed++;
       if (streaming) { event({ error: { message: e.message, type: 'bridge_error' } }); res.end(); }
       else error(controller.signal.aborted ? 504 : 502, e.message);
-    } finally { clearTimeout(timer); active = false; }
+    } finally { clearTimeout(timer); active = false; currentController = undefined; stats.lastDurationMs = Date.now() - requestStarted; }
   });
+  server.cancelActive = () => currentController?.abort();
+  return server;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -121,5 +131,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   const server = createBridge({ key });
   server.listen(Number(process.env.PORT || 8000), '127.0.0.1', () => console.log('OpenBridge: http://127.0.0.1:' + server.address().port + '/v1 (key in .bridge-key or BRIDGE_API_KEY)'));
+  for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {
+    server.cancelActive();
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 3000).unref();
+  });
   server.on('error', e => { console.error(e.message); process.exitCode = 1; });
 }

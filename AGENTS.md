@@ -13,3 +13,8 @@ real smoke requests consume subscription quota and must be reported separately.
 
 Run `npm test`. Use `node scripts/smoke.mjs [--stream]` for a live check.
 Never commit `.bridge-key`, credentials, prompts or response logs.
+
+The native AppKit menu bar controller is built with scripts/build-menubar.sh;
+it controls only its own child process. Do not kill externally started servers.
+Model selection changes the CLI model for the next server start; the public
+model ID remains claude-subscription. Runtime request counters contain no prompts.

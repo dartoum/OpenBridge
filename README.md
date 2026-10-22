@@ -60,3 +60,29 @@ Call from your backend: browser origins are rejected.
 `agy` is a separate installed CLI, not the Command Code executable. Its billing,
 login and tool isolation have not been verified, so it is not exposed here.
 Command Code and Gemini adapters are not implemented.
+
+## macOS menu bar app
+
+```sh
+scripts/build-menubar.sh
+open build/OpenBridge.app
+```
+
+Click **OB** in the menu bar. Start/stop the bridge, cancel the active request,
+choose Sonnet/Opus/Haiku while stopped, and copy the endpoint, key or model ID.
+The model choice persists; requests to `claude-subscription` use that choice.
+These aliases resolve through the installed Claude CLI and depend on your plan.
+Only Sonnet has been live-tested for this release. No quota balance is inferred.
+
+Statistics show successes, failures (including cancellations), and the last
+request duration since the current server started. Invalid/unauthenticated/busy
+requests are rejected before these counters. No prompt/answer history is kept.
+
+The app does not start the bridge automatically. Quitting stops a bridge started
+by the app; externally started servers are detected but never killed by the app.
+Close an old terminal bridge before starting one from the app.
+
+This is a locally signed development app tied to this checkout and the Node path
+found during build. Rebuild if either moves. No login-item or background service
+is installed. The authenticated `/bridge/status` and `/bridge/cancel` endpoints
+support the app. Normal API clients still use `/v1`.

@@ -1,2 +1,4 @@
 .bridge-key
 *.log
+
+build/
