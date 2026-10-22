@@ -30,7 +30,8 @@ quitting stops its own server. Externally started servers are not killed.
 
 ## Provider management
 
-The sidebar contains Claude Pro, ChatGPT, Google AI Pro and Command Code GOAT.
+The sidebar contains Claude Code, Codex, Antigravity and Command Code GOAT. The
+three CLI providers carry their CLI's name and cannot be renamed; API providers can.
 A CLI provider page shows the installed version and login state, and offers
 **Sign in…** and **Update CLI…**. The app reads the version and login itself, so
 they show even when the bridge is stopped. OpenBridge finds a CLI in the usual places

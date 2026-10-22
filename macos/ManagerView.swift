@@ -302,10 +302,14 @@ struct ProviderDetail: View {
             Section {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
-                        // The title is the name field: one place to read and to rename.
-                        TextField("Name", text: $name).labelsHidden().textFieldStyle(.plain).font(.title2.bold())
-                            .focused($focus, equals: .name).onSubmit { commit(.name) }.disabled(!editable)
-                            .help("Click to rename")
+                        // API providers can be renamed in place; a subscription provider is the CLI and keeps its name.
+                        if provider.type == "openai" {
+                            TextField("Name", text: $name).labelsHidden().textFieldStyle(.plain).font(.title2.bold())
+                                .focused($focus, equals: .name).onSubmit { commit(.name) }.disabled(!editable)
+                                .help("Click to rename")
+                        } else {
+                            Text(provider.name).font(.title2.bold())
+                        }
                         Text(provider.type == "openai" ? "OpenAI-compatible API" : "Subscription").foregroundStyle(.secondary)
                     }
                     Spacer()

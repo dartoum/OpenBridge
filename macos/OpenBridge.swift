@@ -44,9 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     var storedProviders: [ProviderRecord]?
     var providers: [ProviderRecord] {
         snapshot?.config.providers ?? storedProviders ?? [
-            ProviderRecord(id: "claude", name: "Claude Pro", type: "claude", enabled: true, cliPath: NSHomeDirectory() + "/.local/bin/claude", baseURL: "", models: []),
-            ProviderRecord(id: "chatgpt", name: "ChatGPT", type: "codex", enabled: true, cliPath: NSHomeDirectory() + "/.local/bin/codex", baseURL: "", models: []),
-            ProviderRecord(id: "google", name: "Google AI Pro", type: "antigravity", enabled: true, cliPath: NSHomeDirectory() + "/.local/bin/agy", baseURL: "", models: [])
+            ProviderRecord(id: "claude", name: "Claude Code", type: "claude", enabled: true, cliPath: NSHomeDirectory() + "/.local/bin/claude", baseURL: "", models: []),
+            ProviderRecord(id: "chatgpt", name: "Codex", type: "codex", enabled: true, cliPath: NSHomeDirectory() + "/.local/bin/codex", baseURL: "", models: []),
+            ProviderRecord(id: "google", name: "Antigravity", type: "antigravity", enabled: true, cliPath: NSHomeDirectory() + "/.local/bin/agy", baseURL: "", models: [])
         ]
     }
     var timer: Timer?

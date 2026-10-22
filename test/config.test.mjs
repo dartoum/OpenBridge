@@ -88,3 +88,11 @@ test('removing a provider drops its configuration, models, check results and key
   assert.equal(status.config.providers.some(p=>p.id==='provider-aaaa'),false);
   assert.equal((await(await fetch(base+'/v1/models',{headers})).json()).data.some(m=>m.id.startsWith('provider-aaaa/')),false);
 });
+
+test('subscription providers always carry their CLI name', () => {
+  const config=defaultConfig();
+  assert.deepEqual(config.providers.slice(0,3).map(p=>p.name),['Claude Code','Codex','Antigravity']);
+  config.providers[0].name='Claude Pro';config.providers[1].name='ChatGPT';config.providers[3].name='My Command Code';
+  validateConfig(config);
+  assert.deepEqual(config.providers.map(p=>p.name),['Claude Code','Codex','Antigravity','My Command Code']);
+});

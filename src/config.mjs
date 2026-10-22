@@ -4,6 +4,8 @@ import { homedir } from 'node:os';
 import { sortModels } from './model-families.mjs';
 
 export const legacySelections = { sonnet:'claude/sonnet', opus:'claude/opus', haiku:'claude/haiku', codex:'chatgpt/default', 'gemini-auto':'google/gemini-3.8-flash-medium', 'gemini-pro':'google/gemini-4-argon-medium', 'gemini-flash':'google/gemini-3.8-flash-medium', commandcode:'commandcode/deepseek/deepseek-v4-flash' };
+// The subscription providers are the CLIs themselves: they carry the CLI's name and cannot be renamed.
+export const CLI_NAMES = { claude:'Claude Code', codex:'Codex', antigravity:'Antigravity' };
 export const MAX_MODELS = 1000;
 export const EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,23}$/;
 const PROVIDER_FIELDS = ['id', 'name', 'type', 'enabled', 'cliPath', 'baseURL', 'models'];
@@ -14,9 +16,9 @@ const UPSTREAM_ID = /^[a-zA-Z0-9_.:/-]{1,180}$/;
 const model = (provider, upstreamModel, name) => ({ id:`${provider}/${upstreamModel}`, upstreamModel, name, enabled:true });
 export function defaultConfig() {
   return { version:1, selectedModel:'claude/sonnet', providers:[
-    { id:'claude', name:'Claude Pro', type:'claude', enabled:true, cliPath:process.env.CLAUDE_BIN || join(homedir(),'.local/bin/claude'), baseURL:'', models:[model('claude','sonnet','Sonnet'),model('claude','opus','Opus'),model('claude','haiku','Haiku')] },
-    { id:'chatgpt', name:'ChatGPT', type:'codex', enabled:true, cliPath:process.env.CODEX_BIN || join(homedir(),'.local/bin/codex'), baseURL:'', models:[model('chatgpt','default','Codex · default model')] },
-    { id:'google', name:'Google AI Pro', type:'antigravity', enabled:true, cliPath:process.env.AGY_BIN || join(homedir(),'.local/bin/agy'), baseURL:'', models:[model('google','gemini-3.8-flash-medium','Gemini 3.8 Flash (Medium)'),model('google','gemini-4-argon-medium','Gemini 4 Argon (Medium)')] },
+    { id:'claude', name:'Claude Code', type:'claude', enabled:true, cliPath:process.env.CLAUDE_BIN || join(homedir(),'.local/bin/claude'), baseURL:'', models:[model('claude','sonnet','Sonnet'),model('claude','opus','Opus'),model('claude','haiku','Haiku')] },
+    { id:'chatgpt', name:'Codex', type:'codex', enabled:true, cliPath:process.env.CODEX_BIN || join(homedir(),'.local/bin/codex'), baseURL:'', models:[model('chatgpt','default','Codex · default model')] },
+    { id:'google', name:'Antigravity', type:'antigravity', enabled:true, cliPath:process.env.AGY_BIN || join(homedir(),'.local/bin/agy'), baseURL:'', models:[model('google','gemini-3.8-flash-medium','Gemini 3.8 Flash (Medium)'),model('google','gemini-4-argon-medium','Gemini 4 Argon (Medium)')] },
     { id:'commandcode', name:'Command Code GOAT', type:'openai', enabled:true, cliPath:'', baseURL:'https://api.commandcode.ai/provider/v1', models:[model('commandcode','deepseek/deepseek-v4-flash','DeepSeek V4 Flash')] },
   ] };
 }
@@ -69,6 +71,7 @@ export function validateConfig(value) {
     if (!valid) throw Error('Invalid provider');
     if (Object.keys(p).some(k => !PROVIDER_FIELDS.includes(k))) throw Error('Unknown provider field; credentials belong in Keychain');
     providers.add(p.id);
+    if (CLI_NAMES[p.type]) p.name = CLI_NAMES[p.type];
     if (p.type === 'openai') p.baseURL = validBaseURL(p.baseURL);
     else if (!p.cliPath.startsWith('/') || p.cliPath.length > 2048) throw Error('CLI path must be absolute');
     for (const m of p.models) validateModel(p, m, models);
