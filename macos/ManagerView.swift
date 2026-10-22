@@ -100,6 +100,10 @@ struct ManagerView: View {
     @State private var selection: String? = "overview"
     @State private var adding = false
     @State private var details: DetailText?
+    @State private var confirmingRemoval = false
+    // Only providers the person added can be removed; the built-in ones can be switched off.
+    var selectedProvider: ProviderRecord? { app.providers.first { $0.id == selection } }
+    var removable: Bool { selectedProvider?.id.hasPrefix("provider-") == true }
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
@@ -116,10 +120,20 @@ struct ManagerView: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 190, ideal: 220)
-            .safeAreaInset(edge: .bottom) {
-                Button { adding = true } label: { Label("Add provider", systemImage: "plus") }
-                    .buttonStyle(.borderless).padding().frame(maxWidth: .infinity, alignment: .leading)
-                    .disabled(app.snapshot == nil)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    Divider()
+                    HStack(spacing: 2) {
+                        Button { adding = true } label: { Image(systemName: "plus").frame(width: 24, height: 22) }
+                            .help("Add a provider").accessibilityLabel("Add provider")
+                            .disabled(app.snapshot == nil || app.maintenanceRunning)
+                        Button { confirmingRemoval = true } label: { Image(systemName: "minus").frame(width: 24, height: 22) }
+                            .help(removable ? "Remove the selected provider" : "Built-in providers can only be switched off")
+                            .accessibilityLabel("Remove provider")
+                            .disabled(!removable || app.snapshot == nil || app.maintenanceRunning)
+                        Spacer()
+                    }.buttonStyle(.borderless).padding(.horizontal, 10).padding(.vertical, 6)
+                }.background(.bar)
             }
         } detail: {
             // Fixed geometry keeps long errors and model IDs from widening the window.
@@ -133,6 +147,10 @@ struct ManagerView: View {
             }
         }
         .sheet(isPresented: $adding) { AddProviderSheet(app: app, presented: $adding) }
+        .alert("Remove \(selectedProvider?.name ?? "provider")?", isPresented: $confirmingRemoval) {
+            Button("Remove", role: .destructive) { if let id = selectedProvider?.id { app.removeProvider(id) } }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Its models disappear from the API and its key is deleted from your Keychain. This can’t be undone.") }
         .onChange(of: app.requestedSelection) { _, id in if let id { selection = id; app.requestedSelection = nil } }
         .alert(app.issue?.title ?? "", isPresented: Binding(get: { app.issue != nil }, set: { if !$0 { app.issue = nil } }), presenting: app.issue) { issue in
             Button("OK") {}
@@ -251,7 +269,6 @@ struct ProviderDetail: View {
     @State private var updatingCLI = false
     @State private var showAdvanced = false
     @State private var changingKey = false
-    @State private var confirmingRemoval = false
     @State private var showOlder = false
     @State private var search = ""
     @State private var newName = ""
@@ -406,18 +423,9 @@ struct ProviderDetail: View {
                         }
                     }
                 }
-                if provider.id.hasPrefix("provider-") {
-                    Section {
-                        Button("Remove provider…", role: .destructive) { confirmingRemoval = true }.disabled(!editable)
-                    }
-                }
             }
         }
         .formStyle(.grouped)
-        .alert("Remove \(provider.name)?", isPresented: $confirmingRemoval) {
-            Button("Remove", role: .destructive) { app.removeProvider(provider.id) }
-            Button("Cancel", role: .cancel) {}
-        } message: { Text("Its models disappear from the API and its key is deleted from your Keychain. This can’t be undone.") }
         .onChange(of: focus) { previous, _ in if let previous, previous != .secret { commit(previous) } }
         .onChange(of: provider) { _, new in
             if focus != .name { name = new.name }

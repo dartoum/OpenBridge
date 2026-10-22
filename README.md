@@ -38,11 +38,11 @@ when none is found. **Sign in…** only appears when the CLI reports that nobody
 signed in. There is no test button: each model shows the outcome of the last
 real request an app made, and nothing is sent to your account on its own.
 
-**Add provider** asks for a name, the address of an OpenAI-compatible endpoint
+The **+** under the sidebar adds a provider; it asks for a name, the address of an OpenAI-compatible endpoint
 and an API key (empty for a server on this Mac, such as LM Studio or Ollama).
 OpenBridge then loads that endpoint's model list and opens its page; the models
-start off. A provider you added can be removed again with **Remove provider…** at the
-bottom of its page (after a confirmation; its Keychain key is deleted too). The
+start off. The **−** next to it removes the selected provider you added (after a confirmation;
+its Keychain key is deleted too). The
 built-in providers can only be switched off. API keys go in macOS Keychain, not the configuration file. For Command Code, enter its key and select a model included in your plan.
 No Command Code CLI is required. GOAT usage is metered against plan credits;
 provider rules may also consume purchased top-ups. OpenBridge buys nothing and
