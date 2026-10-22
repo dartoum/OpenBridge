@@ -1,22 +1,53 @@
 # OpenBridge
 
-Standalone local text bridge; HTTP transport uses Node built-ins. The pinned official Gemini CLI is a runtime dependency, not an embedded SDK. Do not add a plugin lifecycle
-or a framework before the standalone use case works.
+Native AppKit/SwiftUI macOS manager plus a standalone local text bridge using Node
+built-ins. Do not add an OpenCode plugin lifecycle or third-party framework
+without a concrete need. `scripts/build-menubar.sh` bundles the current Node
+runtime and server sources; macOS 14+, current host architecture.
 
-Keep subscription and API billing separate. Never read or copy provider credential files; official CLIs own their account authentication. The app stores its Command Code key in its own macOS Keychain item.
-No silent fallback to API keys. CLI tools and extensions must remain disabled
-for the text-chat adapter. Never expose the listener beyond loopback by default.
+## Configuration and credentials
 
-Unsupported API capabilities must fail explicitly, not be silently discarded.
-Preserve genuine CLI streaming and error outcomes. Tests use injected runners;
-real smoke requests consume subscription quota and must be reported separately.
+`src/config.mjs` owns the validated, persistent provider/model configuration.
+The app stores configuration and local bridge keys under
+`~/Library/Application Support/OpenBridge/`. First launch preserves the existing
+checkout's bridge key when available. CLI mode stores state in its cwd.
 
-Run `npm test`. Use `node scripts/smoke.mjs [--stream]` for a live check.
-Never commit `.bridge-key`, credentials, prompts or response logs.
+Never read or copy provider credential files; official CLIs own their account
+authentication. API-provider credentials belong in this app's own macOS Keychain
+items and the server's memory, never in config.json. No silent API-key or provider
+fallback, no automatic purchases. Command Code may use purchased top-ups under
+its billing rules; do not promise a plan-only spending lock.
 
-The native AppKit menu bar controller is built with scripts/build-menubar.sh;
-it controls only its own child process. Do not kill externally started servers.
-Model selection changes the CLI model for the next request, keeping active requests fixed; the public
-model ID subscription follows the selected provider; explicit provider IDs remain fixed. Runtime request counters contain no prompts.
+Normal clients receive only `.bridge-key`. `/bridge/*` management routes require
+the separate `.bridge-admin-key`, which the UI never copies to clients. Keep the
+listener on loopback and reject browser origins. CLI paths are user-selected,
+absolute executable paths; never interpolate user input into a shell command.
 
-Command Code uses its official Provider API, not a CLI wrapper. It consumes GOAT plan credits and may consume user-purchased top-ups under provider billing rules. Do not promise a plan-only spending lock. Google requires official OAuth login; never add cookie adapters or API-key fallback.
+## Models and lifecycle
+
+Concrete API IDs such as `claude/sonnet` always address that configured model.
+`subscription` is an explicit optional alias following the current selection.
+Legacy provider aliases remain accepted for existing clients but are not listed.
+Disabled models/providers must be absent from `/v1/models` AND refused on direct
+requests. Snapshot provider, model and credentials per request; configuration
+updates affect future calls. Persist nonsecret settings atomically.
+
+Only stop a server owned by the app. Closing the management window leaves the
+menu bar and server alive; quitting stops the app-owned child. Installation,
+login status and a successful real request are separate observations.
+
+## Google
+
+Consumer Gemini CLI support ended June 18, 2026. Use Antigravity (`agy`) rather
+than Gemini CLI or cookie adapters. The installed agy exposes every tool even
+when a custom primary agent declares an empty/minimal tool list. The adapter
+must fail closed if its init event exposes tools. Do not weaken this check or
+modify global Antigravity settings to make a smoke test pass. Track the blocker
+in docs/TODO.md. No claim that Google bridge requests work until this is resolved.
+
+## Verification
+
+Run `npm test`. Integration tests use fixtures; live smoke requests consume
+subscription quota and must be reported separately. No guessed token/quota
+counters. Verify the visible effect of GUI changes, including clipboard actions.
+Never commit keys, provider credentials, prompts, response logs or build output.

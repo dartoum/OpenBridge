@@ -1,26 +1,44 @@
 import AppKit
+import SwiftUI
 import Security
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     var item: NSStatusItem!
-    let menu = NSMenu()
-    var child: Process?
+    var window: NSWindow?
+    @Published var child: Process?
+    @Published var snapshot: BridgeSnapshot?
+    @Published var message = "Gestopt"
+    @Published var feedback: String?
+    @Published var checking = false
+    @Published var saving = false
+    @Published var discovering = false
+    @Published var testingModel: String?
     var timer: Timer?
-    var status: [String: Any]?
-    var message = "Gestopt"
     var polling = false
-    var menuOpen = false
+    var hydratedKeys = false
     let root: URL
+    let state: URL
     let node: String
-    var selectedModel: String { UserDefaults.standard.string(forKey: "ClaudeModel") ?? "sonnet" }
-    var endpoint: String { "http://127.0.0.1:8000" }
-    var key: String? { try? String(contentsOf: root.appendingPathComponent(".bridge-key"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) }
-
+    let endpoint = "http://127.0.0.1:8000"
+    var bridgeKey: String? { try? String(contentsOf: state.appendingPathComponent(".bridge-key"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) }
+    var adminKey: String? { try? String(contentsOf: state.appendingPathComponent(".bridge-admin-key"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) }
     override init() {
-        root = URL(fileURLWithPath: Bundle.main.object(forInfoDictionaryKey: "BridgeRoot") as? String ?? FileManager.default.currentDirectoryPath)
-        node = Bundle.main.object(forInfoDictionaryKey: "NodePath") as? String ?? "/usr/local/bin/node"
+        let bundle = Bundle.main
+        let repo = URL(fileURLWithPath: bundle.object(forInfoDictionaryKey: "BridgeRoot") as? String ?? FileManager.default.currentDirectoryPath)
+        let bundled = bundle.resourceURL?.appendingPathComponent("bridge")
+        root = bundled.flatMap { FileManager.default.fileExists(atPath: $0.appendingPathComponent("src/server.mjs").path) ? $0 : nil } ?? repo
+        node = bundle.resourceURL?.appendingPathComponent("node").path ?? "/usr/local/bin/node"
+        state = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("OpenBridge")
         super.init()
+        do {
+            try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+            let target = state.appendingPathComponent(".bridge-key")
+            if !FileManager.default.fileExists(atPath: target.path), let existing = try? Data(contentsOf: repo.appendingPathComponent(".bridge-key")) {
+                try existing.write(to: target, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+            }
+        } catch { feedback = "Instellingenmap openen mislukt: \(error.localizedDescription)" }
     }
     // Small template glyph: two bridge piers, a deck and a single arch.
     func bridgeIcon() -> NSImage {
@@ -46,216 +64,246 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return image
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let mainMenu = NSMenu()
+        let applicationItem = NSMenuItem()
+        let applicationMenu = NSMenu()
+        applicationMenu.addItem(withTitle: "Sluit OpenBridge", action: #selector(quit), keyEquivalent: "q").target = self
+        applicationItem.submenu = applicationMenu; mainMenu.addItem(applicationItem)
+        let editItem = NSMenuItem(); let editMenu = NSMenu(title: "Wijzig")
+        for (title, action, key) in [("Maak ongedaan", "undo:", "z"), ("Knip", "cut:", "x"), ("Kopieer", "copy:", "c"), ("Plak", "paste:", "v"), ("Selecteer alles", "selectAll:", "a")] {
+            editMenu.addItem(withTitle: title, action: Selector(action), keyEquivalent: key)
+        }
+        editItem.submenu = editMenu; mainMenu.addItem(editItem); NSApp.mainMenu = mainMenu
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = bridgeIcon()
         item.button?.imagePosition = .imageOnly
-        item.button?.title = ""
-        item.menu = menu
-        menu.delegate = self
-        rebuild()
+        rebuildMenu()
         poll()
         if CommandLine.arguments.contains("--start") { start() }
+        if !CommandLine.arguments.contains("--background") { openManager() }
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in Task { @MainActor in self?.poll() } }
     }
-    func menuWillOpen(_ menu: NSMenu) { rebuild(); menuOpen = true; poll() }
-    func menuDidClose(_ menu: NSMenu) { menuOpen = false; rebuild() }
-    func add(_ title: String, action: Selector? = nil, enabled: Bool = true, to targetMenu: NSMenu? = nil) -> NSMenuItem {
-        let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        entry.target = self
-        entry.isEnabled = enabled && action != nil
-        (targetMenu ?? menu).addItem(entry)
-        return entry
-    }
-    func rebuild() {
-        guard !menuOpen else { return }
-        menu.removeAllItems()
-        menu.autoenablesItems = false
-        let running = status != nil
-        let busy = status?["active"] as? Bool ?? false
-        item.button?.title = ""
-        item.button?.toolTip = "OpenBridge — \(message)"
-        _ = add("OpenBridge · \(message)")
-        _ = add(status?["model"] as? String ?? selectedModel)
-        if running && child == nil { _ = add("Gestart buiten deze app") }
-        menu.addItem(.separator())
-        _ = add("Start bridge", action: #selector(start), enabled: !running && child == nil)
-        _ = add("Stop bridge", action: #selector(stop), enabled: child != nil)
-        _ = add("Annuleer aanvraag", action: #selector(cancel), enabled: busy)
-        let models = NSMenu(); models.autoenablesItems = false
-        let choices: [(String, String)] = [("sonnet", "Claude · Sonnet"), ("opus", "Claude · Opus"), ("haiku", "Claude · Haiku"), ("codex", "ChatGPT · Codex"), ("gemini-auto", "Google · Gemini Auto"), ("gemini-pro", "Google · Gemini Pro"), ("gemini-flash", "Google · Gemini Flash"), ("commandcode", "Command Code · GOAT")]
-        for (name, label) in choices {
-            let ready = name != "commandcode" || status?["commandCodeConfigured"] as? Bool == true
-            let entry = add(label + (ready ? "" : " (sleutel instellen)"), action: #selector(selectModel(_:)), enabled: ready || !running, to: models)
-            entry.representedObject = name
-            entry.state = name == (status?["model"] as? String ?? selectedModel) ? .on : .off
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { openManager(); return true }
+    func rebuildMenu() {
+        let menu = NSMenu(); menu.autoenablesItems = false
+        func add(_ title: String, _ action: Selector?, _ enabled: Bool = true) {
+            let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            entry.target = self; entry.isEnabled = enabled && action != nil; menu.addItem(entry)
         }
-        let modelItem = NSMenuItem(title: "Model voor nieuwe aanvragen", action: nil, keyEquivalent: "")
-        modelItem.submenu = models; menu.addItem(modelItem)
-        if busy, let model = status?["activeModel"] as? String { _ = add("Lopende aanvraag: \(model)") }
+        add("OpenBridge · \(message)", nil)
+        add("Open beheer…", #selector(openManager))
         menu.addItem(.separator())
-        _ = add("Aanvragen sinds serverstart")
-        _ = add("Geslaagd: \(status?["succeeded"] as? Int ?? 0)   ·   Mislukt: \(status?["failed"] as? Int ?? 0)")
-        if let duration = status?["lastDurationMs"] as? Int { _ = add(String(format: "Laatste aanvraag: %.1f s", Double(duration) / 1000)) }
+        add("Start bridge", #selector(start), child == nil && snapshot == nil)
+        add("Stop bridge", #selector(stop), child != nil)
+        add("Annuleer aanvraag", #selector(cancel), snapshot?.active == true)
         menu.addItem(.separator())
-        _ = add("Kopieer alle verbindingsgegevens", action: #selector(copyConfig), enabled: key != nil)
-        _ = add("Kopieer API-adres", action: #selector(copyURL))
-        _ = add("Kopieer API-sleutel", action: #selector(copyKey), enabled: key != nil)
-        _ = add("Kopieer model-ID", action: #selector(copyModel))
-        _ = add("Command Code instellen…", action: #selector(configureCommandCode))
-        _ = add("Google aanmelden…", action: #selector(googleLogin))
-        _ = add("Open handleiding", action: #selector(openDocs))
+        add("Kopieer model-ID", #selector(copyModel), snapshot != nil)
+        add("Kopieer alle verbindingsgegevens", #selector(copyConfig), snapshot != nil)
         menu.addItem(.separator())
-        _ = add("Sluit OpenBridge", action: #selector(quit))
+        add("Sluit OpenBridge", #selector(quit))
+        item.menu = menu
+        item.button?.toolTip = "OpenBridge — \(message)"
     }
-    func poll() {
-        guard !polling else { return }
-        guard let key else { status = nil; message = child == nil ? "Gestopt" : "Starten…"; rebuild(); return }
-        polling = true
-        var request = URLRequest(url: URL(string: endpoint + "/bridge/status")!)
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 1
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            let code = (response as? HTTPURLResponse)?.statusCode
-            let object = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    @objc func openManager() {
+        if window == nil {
+            let controller = NSHostingController(rootView: ManagerView(app: self))
+            let win = NSWindow(contentViewController: controller)
+            win.title = "OpenBridge"
+            win.setContentSize(NSSize(width: 960, height: 740))
+            win.minSize = NSSize(width: 830, height: 620)
+            win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            win.isReleasedWhenClosed = false
+            win.center(); window = win
+        }
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    func request(_ path: String, method: String = "GET", body: Data? = nil, timeout: TimeInterval = 20, completion: @escaping @MainActor (Result<Data, Error>) -> Void) {
+        guard let key = path.hasPrefix("/bridge/") ? adminKey : bridgeKey else { completion(.failure(NSError(domain: "OpenBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "Start eerst de bridge."]))); return }
+        var req = URLRequest(url: URL(string: endpoint + path)!)
+        req.httpMethod = method; req.httpBody = body; req.timeoutInterval = timeout
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        if body != nil { req.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        URLSession.shared.dataTask(with: req) { data, response, error in
             Task { @MainActor in
-                self.polling = false
-                if code == 200, let object, object["service"] as? String == "openbridge" {
-                    self.status = object
-                    self.message = object["active"] as? Bool == true ? "Bezig" : "Actief"
-                } else {
-                    self.status = nil
-                    if code != nil { self.message = "Poort bezet of oudere bridge" }
-                    else if self.child != nil { self.message = "Starten…" }
-                    else if !self.message.hasPrefix("Start mislukt") { self.message = "Gestopt" }
+                if let error { completion(.failure(error)); return }
+                let data = data ?? Data()
+                if let code = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(code) { completion(.success(data)) }
+                else {
+                    let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                    let error = json?["error"] as? [String: Any]
+                    completion(.failure(NSError(domain: "OpenBridge", code: (response as? HTTPURLResponse)?.statusCode ?? 0, userInfo: [NSLocalizedDescriptionKey: error?["message"] as? String ?? "Bridge niet bereikbaar"])))
                 }
-                self.rebuild()
             }
         }.resume()
     }
+    func jsonData(_ object: Any) -> Data? { try? JSONSerialization.data(withJSONObject: object) }
+    func poll() {
+        guard !polling, bridgeKey != nil else { return }
+        polling = true
+        request("/bridge/status", timeout: 1) { result in
+            self.polling = false
+            switch result {
+            case .success(let data):
+                do {
+                    self.snapshot = try JSONDecoder().decode(BridgeSnapshot.self, from: data)
+                    self.message = self.snapshot?.active == true ? "Bezig" : "Actief"
+                    if !self.hydratedKeys {
+                        self.hydratedKeys = true
+                        if self.child != nil {
+                            for provider in self.snapshot?.config.providers.filter({ $0.type == "openai" }) ?? [] {
+                                if let key = self.readProviderKey(provider.id) { self.uploadKey(provider.id, key) }
+                            }
+                        }
+                        self.refreshChecks()
+                    }
+                } catch { self.snapshot = nil; self.message = "Herstart nodig voor nieuwe versie" }
+            case .failure: self.snapshot = nil; self.message = self.child == nil ? "Gestopt" : "Starten…"
+            }
+            self.rebuildMenu()
+        }
+    }
     @objc func start() {
-        guard child == nil, status == nil else { return }
+        guard child == nil, snapshot == nil else { return }
+        guard FileManager.default.isExecutableFile(atPath: node) else { feedback = "De meegeleverde Node-runtime ontbreekt. Bouw de app opnieuw."; openManager(); return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: node)
         process.arguments = [root.appendingPathComponent("src/server.mjs").path]
-        process.currentDirectoryURL = root
+        process.currentDirectoryURL = state
         var env = ProcessInfo.processInfo.environment
-        env["CLAUDE_MODEL"] = selectedModel; env["PORT"] = "8000"
-        env.removeValue(forKey: "BRIDGE_API_KEY")
+        env["PORT"] = "8000"; env["BRIDGE_CONFIG_PATH"] = state.appendingPathComponent("config.json").path
+        for key in ["BRIDGE_API_KEY", "COMMAND_CODE_API_KEY", "COMMAND_CODE_MODEL"] { env.removeValue(forKey: key) }
         env["PATH"] = "/usr/local/bin:/opt/homebrew/bin:\(NSHomeDirectory())/.local/bin:/usr/bin:/bin"
-        if let saved = readCommandCodeKey() { env["COMMAND_CODE_API_KEY"] = saved }
-        env["COMMAND_CODE_MODEL"] = UserDefaults.standard.string(forKey: "CommandCodeModel") ?? "deepseek/deepseek-v4-flash"
         process.environment = env
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        process.terminationHandler = { process in
-            Task { @MainActor in
-                self.child = nil
-                self.status = nil
-                self.message = process.terminationStatus == 0 ? "Gestopt" : "Start mislukt (\(process.terminationStatus))"
-                self.rebuild()
+        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { process in Task { @MainActor in self.child = nil; self.snapshot = nil; self.hydratedKeys = false; self.message = process.terminationStatus == 0 ? "Gestopt" : "Start mislukt (\(process.terminationStatus))"; self.rebuildMenu() } }
+        do { try process.run(); child = process; message = "Starten…"; hydratedKeys = false; rebuildMenu() }
+        catch { feedback = error.localizedDescription; message = "Start mislukt"; openManager() }
+    }
+    @objc func stop() { child?.terminate(); message = "Stoppen…"; rebuildMenu() }
+    @objc func cancel() { request("/bridge/cancel", method: "POST") { _ in self.poll() } }
+    func choose(_ id: String) {
+        request("/bridge/model", method: "POST", body: jsonData(["model": id])) { result in
+            if case .failure(let error) = result { self.feedback = error.localizedDescription }
+            self.poll()
+        }
+    }
+    func refreshChecks() {
+        guard !checking, snapshot != nil else { return }
+        checking = true
+        request("/bridge/diagnostics", method: "POST", timeout: 25) { result in
+            self.checking = false
+            if case .failure(let error) = result { self.feedback = error.localizedDescription }
+            self.poll()
+        }
+    }
+    func saveProvider(_ provider: ProviderRecord, secret: String, completion: @escaping (Bool) -> Void = { _ in }) {
+        guard var config = snapshot?.config else { feedback = "Start eerst de bridge."; return }
+        if let index = config.providers.firstIndex(where: { $0.id == provider.id }) { config.providers[index] = provider } else { config.providers.append(provider) }
+        if !config.providers.contains(where: { $0.enabled && $0.models.contains(where: { $0.enabled && $0.id == config.selectedModel }) }) {
+            guard let replacement = config.providers.filter(\.enabled).flatMap(\.models).first(where: \.enabled) else { feedback = "Houd minstens één model ingeschakeld."; return }
+            config.selectedModel = replacement.id
+        }
+        saving = true
+        let body: Data
+        do { body = try JSONEncoder().encode(config) } catch { saving = false; feedback = error.localizedDescription; return }
+        request("/bridge/config", method: "PUT", body: body) { result in
+            self.saving = false
+            switch result {
+            case .success:
+                if !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if self.storeProviderKey(provider.id, secret) { self.uploadKey(provider.id, secret) }
+                    else { self.feedback = "Provider bewaard; sleutel opslaan in Sleutelhanger mislukt."; self.poll(); completion(false); return }
+                }
+                self.feedback = "Instellingen bewaard. Nieuwe aanvragen gebruiken deze configuratie."
+                self.poll(); completion(true)
+            case .failure(let error): self.feedback = error.localizedDescription; completion(false)
             }
         }
-        do { try process.run(); child = process; message = "Starten…"; rebuild() }
-        catch { message = "Start mislukt"; show(error.localizedDescription) }
     }
-    @objc func stop() { child?.terminate(); message = "Stoppen…"; rebuild() }
-    @objc func cancel() {
-        guard let key else { return }
-        var request = URLRequest(url: URL(string: endpoint + "/bridge/cancel")!)
-        request.httpMethod = "POST"; request.timeoutInterval = 3
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        URLSession.shared.dataTask(with: request) { _, _, _ in }.resume()
+    func discover(_ providerID: String) {
+        guard !discovering else { return }; discovering = true
+        request("/bridge/discover", method: "POST", body: jsonData(["providerID": providerID]), timeout: 25) { result in
+            self.discovering = false
+            do {
+                let data = try result.get()
+                let rows = try JSONSerialization.jsonObject(with: data) as? [[String: String]] ?? []
+                guard var provider = self.snapshot?.config.providers.first(where: { $0.id == providerID }) else { return }
+                var count = 0
+                for row in rows {
+                    guard let upstream = row["id"] else { continue }
+                    let id = providerID + "/" + upstream
+                    if !provider.models.contains(where: { $0.id == id }) { provider.models.append(ModelRecord(id: id, upstreamModel: upstream, name: row["name"] ?? upstream, enabled: false)); count += 1 }
+                }
+                if count > 0 { self.saveProvider(provider, secret: "") } else { self.feedback = "Geen nieuwe modellen gevonden." }
+            } catch { self.feedback = error.localizedDescription }
+        }
     }
-    @objc func selectModel(_ sender: NSMenuItem) {
-        guard let value = sender.representedObject as? String else { return }
-        guard status != nil else { UserDefaults.standard.set(value, forKey: "ClaudeModel"); rebuild(); return }
-        guard let key else { return }
-        var request = URLRequest(url: URL(string: endpoint + "/bridge/model")!)
-        request.httpMethod = "POST"; request.timeoutInterval = 3
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["model": value])
-        URLSession.shared.dataTask(with: request) { _, response, error in
-            Task { @MainActor in
-                if (response as? HTTPURLResponse)?.statusCode == 200 {
-                    UserDefaults.standard.set(value, forKey: "ClaudeModel")
-                    self.status?["model"] = value
-                    self.rebuild(); self.poll()
-                } else { self.show("Model wijzigen mislukt. \(error?.localizedDescription ?? "Herstart de bridge om de nieuwste versie te laden.")") }
-            }
-        }.resume()
+    func testModel(_ model: String) {
+        guard testingModel == nil else { return }; testingModel = model
+        request("/v1/chat/completions", method: "POST", body: jsonData(["model": model, "messages": [["role": "user", "content": "Reply with exactly: bridge works"]]]), timeout: 125) { result in
+            self.testingModel = nil
+            switch result { case .success: self.feedback = "Testaanvraag geslaagd voor \(model)."; case .failure(let error): self.feedback = "Test mislukt: \(error.localizedDescription)" }
+            self.poll()
+        }
     }
-    func keyQuery() -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.openbridge.commandcode", kSecAttrAccount as String: "api-key"]
+    func keyQuery(_ provider: String) -> [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.openbridge.provider", kSecAttrAccount as String: provider] }
+    func readProviderKey(_ provider: String) -> String? {
+        var query = keyQuery(provider); query[kSecReturnData as String] = true; query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        if SecItemCopyMatching(query as CFDictionary, &result) != errSecSuccess && provider == "commandcode" {
+            query[kSecAttrService as String] = "local.openbridge.commandcode"; query[kSecAttrAccount as String] = "api-key"
+            _ = SecItemCopyMatching(query as CFDictionary, &result)
+        }
+        guard let data = result as? Data else { return nil }; return String(data: data, encoding: .utf8)
     }
-    func readCommandCodeKey() -> String? {
-        var query = keyQuery(); query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var data: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &data) == errSecSuccess, let bytes = data as? Data else { return nil }
-        return String(data: bytes, encoding: .utf8)
+    func storeProviderKey(_ provider: String, _ key: String) -> Bool {
+        let value = [kSecValueData as String: Data(key.trimmingCharacters(in: .whitespacesAndNewlines).utf8)]
+        var code = SecItemUpdate(keyQuery(provider) as CFDictionary, value as CFDictionary)
+        if code == errSecItemNotFound { var entry = keyQuery(provider); entry.merge(value) { _, new in new }; code = SecItemAdd(entry as CFDictionary, nil) }
+        return code == errSecSuccess
     }
-    @objc func configureCommandCode() {
-        let alert = NSAlert()
-        alert.messageText = "Command Code GOAT"
-        alert.informativeText = "Gebruik je Command Code API-sleutel. Deze wordt in macOS Sleutelhanger bewaard. Aanvragen gebruiken je GOAT-tegoed; extra aangekochte credits kunnen ook worden verbruikt."
-        alert.addButton(withTitle: "Bewaar"); alert.addButton(withTitle: "Annuleer")
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 350, height: 76))
-        let secret = NSSecureTextField(frame: NSRect(x: 0, y: 44, width: 350, height: 24))
-        secret.placeholderString = "API-sleutel (leeg = bestaande behouden)"
-        let model = NSTextField(frame: NSRect(x: 0, y: 4, width: 350, height: 24))
-        model.stringValue = UserDefaults.standard.string(forKey: "CommandCodeModel") ?? "deepseek/deepseek-v4-flash"
-        view.addSubview(secret); view.addSubview(model); alert.accessoryView = view
-        NSApp.activate(ignoringOtherApps: true)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let value = secret.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let apiKey = value.isEmpty ? readCommandCodeKey() : value, !apiKey.isEmpty else { show("Vul een API-sleutel in."); return }
-        let modelID = model.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard modelID.range(of: "^[a-zA-Z0-9_.:/-]{1,150}$", options: .regularExpression) != nil else { show("Vul een geldig model-ID in."); return }
-        let attributes = [kSecValueData as String: Data(apiKey.utf8)] as [String: Any]
-        var result = SecItemUpdate(keyQuery() as CFDictionary, attributes as CFDictionary)
-        if result == errSecItemNotFound { var entry = keyQuery(); entry.merge(attributes) { _, new in new }; result = SecItemAdd(entry as CFDictionary, nil) }
-        guard result == errSecSuccess else { show("Opslaan in Sleutelhanger mislukt (\(result))."); return }
-        UserDefaults.standard.set(modelID, forKey: "CommandCodeModel")
-        guard status != nil, let key else { show("Bewaard. Start de bridge om Command Code te gebruiken."); return }
-        var request = URLRequest(url: URL(string: endpoint + "/bridge/commandcode")!)
-        request.httpMethod = "POST"; request.timeoutInterval = 3
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["key": apiKey, "model": modelID])
-        URLSession.shared.dataTask(with: request) { _, response, _ in
-            Task { @MainActor in
-                if (response as? HTTPURLResponse)?.statusCode == 200 { self.poll() }
-                else { self.show("Bewaard. Herstart de bridge om de instellingen te laden.") }
-            }
-        }.resume()
+    func uploadKey(_ provider: String, _ key: String) {
+        request("/bridge/credentials", method: "POST", body: jsonData(["providerID": provider, "key": key])) { result in
+            if case .failure(let error) = result { self.feedback = error.localizedDescription }; self.poll()
+        }
     }
-    @objc func googleLogin() { NSWorkspace.shared.open(root.appendingPathComponent("scripts/google-login.command")) }
-    @objc func copyConfig() {
-        guard let key else { return }
-        copy("API-type: OpenAI Chat Completions\nBase URL: \(endpoint)/v1\nAPI key: \(key)\nModel: subscription\n")
+    func pickExecutable() -> String? {
+        let panel = NSOpenPanel(); panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false; panel.showsHiddenFiles = true
+        return panel.runModal() == .OK ? panel.url?.path : nil
+    }
+    func installInstructions(_ type: String) {
+        let links = ["claude": "https://code.claude.com/docs/en/setup", "codex": "https://developers.openai.com/codex/cli", "antigravity": "https://antigravity.google/docs/cli/quickstart"]
+        if let value = links[type], let url = URL(string: value) { NSWorkspace.shared.open(url) }
+    }
+    func login(_ provider: ProviderRecord) {
+        guard FileManager.default.isExecutableFile(atPath: provider.cliPath) else { feedback = "Installeer eerst de CLI of kies een uitvoerbaar bestand."; return }
+        let quote: (String) -> String = { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        let suffix = provider.type == "claude" ? " auth login" : provider.type == "codex" ? " login" : ""
+        let script = "#!/bin/zsh\ncd \(quote(state.path))\nexec \(quote(provider.cliPath))\(suffix)\n"
+        do {
+            let file = state.appendingPathComponent("login-\(provider.id).command")
+            try script.write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+            NSWorkspace.shared.open(file)
+        } catch { feedback = error.localizedDescription }
     }
     func copy(_ value: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value, forType: .string) }
-    @objc func copyURL() { copy(endpoint + "/v1") }
-    @objc func copyKey() { if let key { copy(key) } }
-    @objc func copyModel() { copy("subscription") }
-    @objc func openDocs() { NSWorkspace.shared.open(root.appendingPathComponent("README.md")) }
-    func show(_ text: String) { let alert = NSAlert(); alert.messageText = "OpenBridge"; alert.informativeText = text; NSApp.activate(ignoringOtherApps: true); alert.runModal() }
+    @objc func copyModel() { if let id = snapshot?.selectedModelID { copy(id); feedback = "Model-ID gekopieerd: \(id)" } }
+    func copyURL() { copy(endpoint + "/v1") }
+    func copyKey() { if let key = bridgeKey { copy(key) } }
+    @objc func copyConfig() { if let key = bridgeKey, let id = snapshot?.selectedModelID { copy("API-type: OpenAI Chat Completions\nBase URL: \(endpoint)/v1\nAPI key: \(key)\nModel: \(id)\n") } }
     @objc func quit() { NSApp.terminate(nil) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let process = child, process.isRunning else { return .terminateNow }
         process.terminationHandler = { _ in Task { @MainActor in NSApp.reply(toApplicationShouldTerminate: true) } }
-        process.terminate()
-        return .terminateLater
+        process.terminate(); return .terminateLater
     }
 }
 @main
 struct OpenBridgeMain {
     @MainActor static func main() {
-        let app = NSApplication.shared
-        let delegate = AppDelegate()
-        app.delegate = delegate
-        app.setActivationPolicy(.accessory)
-        withExtendedLifetime(delegate) { app.run() }
+        let app = NSApplication.shared; let delegate = AppDelegate(); app.delegate = delegate
+        app.setActivationPolicy(.accessory); withExtendedLifetime(delegate) { app.run() }
     }
 }

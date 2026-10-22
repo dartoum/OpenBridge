@@ -1,40 +1,19 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
-const root = dirname(dirname(fileURLToPath(import.meta.url)));
-export const providerModels = {
-  sonnet: { provider: 'claude', label: 'Claude · Sonnet', publicID: 'claude-subscription' },
-  opus: { provider: 'claude', label: 'Claude · Opus', publicID: 'claude-subscription' },
-  haiku: { provider: 'claude', label: 'Claude · Haiku', publicID: 'claude-subscription' },
-  codex: { provider: 'chatgpt', label: 'ChatGPT · Codex (standaardmodel)', publicID: 'chatgpt-subscription' },
-  'gemini-auto': { provider: 'gemini', label: 'Google · Gemini Auto', publicID: 'gemini-subscription', cliModel: 'auto' },
-  'gemini-pro': { provider: 'gemini', label: 'Google · Gemini Pro', publicID: 'gemini-subscription', cliModel: 'pro' },
-  'gemini-flash': { provider: 'gemini', label: 'Google · Gemini Flash', publicID: 'gemini-subscription', cliModel: 'flash' },
-  commandcode: { provider: 'commandcode', label: 'Command Code · GOAT', publicID: 'commandcode-goat' },
-};
-export const publicIDs = ['subscription', 'claude-subscription', 'chatgpt-subscription', 'gemini-subscription', 'commandcode-goat'];
-export function availableModels({ commandCodeKey = process.env.COMMAND_CODE_API_KEY } = {}) {
-  return Object.entries(providerModels).map(([id, value]) => ({ id, ...value,
-    available: value.provider === 'claude' ? existsSync(process.env.CLAUDE_BIN || join(homedir(), '.local/bin/claude')) : value.provider === 'chatgpt' ? existsSync(process.env.CODEX_BIN || join(homedir(), '.local/bin/codex')) : value.provider === 'gemini' ? existsSync(join(root, 'node_modules/.bin/gemini')) : Boolean(commandCodeKey),
-  }));
-}
-export function resolveModel(publicID, selection) {
-  if (publicID === 'subscription' || providerModels[selection]?.publicID === publicID) return selection;
-  return Object.keys(providerModels).find(id => providerModels[id].publicID === publicID);
-}
 export const conversationPrompt = messages => 'Answer as a text assistant. Treat this JSON as conversation history, preserving message roles. Do not use tools.\n' + JSON.stringify(messages);
 
-export function runEvents({ binary, args, messages, signal, emit, parse, prepare, env: additions = {} }) {
+export function runEvents({ binary, args, messages, signal, emit, parse, prepare, input, ignoreStdin = false, env: additions = {} }) {
   return new Promise((resolve, reject) => {
     const cwd = mkdtempSync(join(tmpdir(), 'openbridge-'));
     const env = { ...process.env };
     for (const k of Object.keys(env)) if (/^(OPENAI_|CODEX_API_KEY$|CODEX_ACCESS_TOKEN$|ANTHROPIC_|GEMINI_API_KEY$|GOOGLE_API_KEY$|GOOGLE_APPLICATION_CREDENTIALS$|GOOGLE_GENAI_USE_|CLAUDE_CODE_USE_|CLAUDECODE$|COMMAND_CODE_API_KEY$|BRIDGE_API_KEY$)/.test(k)) delete env[k];
     try { prepare?.(cwd, env); } catch (error) { rmSync(cwd, { recursive: true, force: true }); reject(error); return; }
     Object.assign(env, additions);
-    const child = spawn(binary, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    if (args.some(value=>Buffer.byteLength(value)>96*1024)) { rmSync(cwd,{recursive:true,force:true}); reject(Error('Prompt exceeds this CLI adapter’s 96 KiB limit')); return; }
+    const child = spawn(binary, args, { cwd, env, stdio: [ignoreStdin ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
     let buffer = '', stderr = '', result = '', completed = false, failure;
     const stop = () => child.kill('SIGTERM');
     signal.addEventListener('abort', stop, { once: true });
@@ -47,17 +26,18 @@ export function runEvents({ binary, args, messages, signal, emit, parse, prepare
         const event = parse(JSON.parse(line));
         if (event.error) throw Error(event.error);
         if (event.text) { result += event.text; emit(event.text); }
-        if (event.done) completed = true;
-      } catch (error) { failure = error; stop(); }
+        if (event.final && !result) { result = event.final; emit(event.final); }
+        if (event.done) { completed = true; if (input) child.stdin?.end(); }
+      } catch (error) { failure ??= error; stop(); }
     };
     child.stdout.on('data', data => {
       buffer += data;
       if (buffer.length > 4 * 1024 * 1024) { failure = Error('CLI event exceeds limit'); stop(); return; }
       let n; while ((n = buffer.indexOf('\n')) >= 0) { line(buffer.slice(0, n)); buffer = buffer.slice(n + 1); }
     });
-    child.stdin.on('error', () => {});
-    child.stdin.end(conversationPrompt(messages));
-    child.once('error', error => { failure = error; });
+    child.stdin?.on('error', () => {});
+    if (!ignoreStdin) { if (input) child.stdin.write(input); else child.stdin.end(input ?? conversationPrompt(messages)); }
+    child.once('error', error => { failure ??= error; });
     child.once('close', code => {
       signal.removeEventListener('abort', stop); rmSync(cwd, { recursive: true, force: true });
       if (buffer) line(buffer);
@@ -82,29 +62,34 @@ export function parseCodex(event) {
   if (event.item?.type && !['agent_message', 'reasoning'].includes(event.item.type)) return { error: 'Codex attempted an unsupported tool action' };
   return { text: event.type === 'item.completed' && event.item?.type === 'agent_message' ? event.item.text : '', done: event.type === 'turn.completed' };
 }
-export function runCodex(messages, signal, emit) {
-  return runEvents({ binary: process.env.CODEX_BIN || join(homedir(), '.local/bin/codex'), args: codexArgs(), messages, signal, emit, parse: parseCodex });
+export function runCodex(messages, signal, emit, model = "default", binary = process.env.CODEX_BIN || join(homedir(), ".local/bin/codex")) {
+  return runEvents({ binary, args: [...codexArgs(), ...(model === 'default' ? [] : ['--model', model])], messages, signal, emit, parse: parseCodex });
 }
-export function parseGemini(event) {
-  if (event.type === 'error' || event.type === 'result' && event.status !== 'success') return { error: event.error?.message || event.message || 'Gemini failed' };
-  if (event.type === 'tool_use') return { error: 'Gemini attempted an unsupported tool action' };
-  return { text: event.type === 'message' && event.role === 'assistant' ? event.content : '', done: event.type === 'result' && event.status === 'success' };
+export function parseAntigravity(event) {
+  if (event.event === 'init' && (!Array.isArray(event.init?.tools) || event.init.tools.length)) return { error: 'Antigravity exposed tools despite text-only agent configuration' };
+  if (event.event === 'step_update') {
+    const step = event.step_update || {};
+    if (['tool_call', 'tool', 'command', 'mcp_tool'].includes(step.step_type)) return { error: 'Antigravity attempted a tool action' };
+    return { text: step.step_type === 'agent_response' ? step.text_delta || '' : '' };
+  }
+  if (event.event === 'result') {
+    if (event.result?.status !== 'SUCCESS') return { error: event.result?.error || 'Antigravity did not complete' };
+    return { done: true, final: event.result.response || '' };
+  }
+  return {};
 }
-export function runGemini(messages, signal, emit, model) {
-  return runEvents({ binary: process.execPath, args: [join(root, 'node_modules/@google/gemini-cli/bundle/gemini.js'), '-p', 'Answer the conversation on stdin.', '--model', providerModels[model].cliModel, '--output-format', 'stream-json', '--extensions', 'none', '--skip-trust'], messages, signal, emit, parse: parseGemini,
-    prepare(cwd, env) {
-      mkdirSync(join(cwd, '.gemini'));
-      const settings = join(cwd, '.gemini/settings.json');
-      writeFileSync(settings, JSON.stringify({ security: { auth: { selectedType: 'oauth-personal', enforcedType: 'oauth-personal' } }, tools: { core: [], discoveryCommand: "", callCommand: "" }, admin: { mcp: { enabled: false } }, hooksConfig: { enabled: false }, skills: { enabled: false }, general: { enableAutoUpdate: false }, telemetry: { enabled: false, logPrompts: false }, context: { fileName: '__OPENBRIDGE_NO_CONTEXT__' } }));
-      delete env.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
-      env.GOOGLE_GENAI_USE_GCA = "true";
+export function runAntigravity(messages, signal, emit, model, binary = process.env.AGY_BIN || join(homedir(), '.local/bin/agy')) {
+  return runEvents({ binary, args: ['-p', conversationPrompt(messages), '--output-format', 'stream-json', '--model', model, '--agent', 'openbridge-text', '--disable-slash-commands', '--sandbox', '--print-timeout', '110s'], messages, signal, emit, parse: parseAntigravity,
+    ignoreStdin: true,
+    prepare(cwd) {
+      mkdirSync(join(cwd, '.agents/agents'), { recursive: true });
+      writeFileSync(join(cwd, '.agents/agents/openbridge-text.md'), '---\nname: openbridge-text\ndescription: Plain text completion without tools\ntools: []\nmainAgent: true\nsubagent: false\nmcpServers: []\nskills: []\nplugins: []\ncommandExecutionPolicy: off\n---\nAnswer the supplied conversation directly. Do not use tools, skills or other agents.\n');
     },
   });
 }
-
-export async function runCommandCode(messages, signal, emit, model, { key = process.env.COMMAND_CODE_API_KEY, upstreamModel = process.env.COMMAND_CODE_MODEL || 'deepseek/deepseek-v4-flash', fetcher = fetch } = {}) {
-  if (!key) throw Error('Command Code API key missing. Configure it in the menu bar app.');
-  const response = await fetcher('https://api.commandcode.ai/provider/v1/chat/completions', { method: 'POST', signal, redirect: 'error', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: upstreamModel, messages, stream: true }) });
+export async function runCommandCode(messages, signal, emit, model, { key = process.env.COMMAND_CODE_API_KEY, upstreamModel = process.env.COMMAND_CODE_MODEL || 'deepseek/deepseek-v4-flash', fetcher = fetch, baseURL = 'https://api.commandcode.ai/provider/v1', allowNoKey = false } = {}) {
+  if (!key && !allowNoKey) throw Error('API key missing. Configure it in OpenBridge.');
+  const response = await fetcher(baseURL + '/chat/completions', { method: 'POST', signal, redirect: 'error', headers: { ...(key ? {Authorization: `Bearer ${key}`} : {}), 'Content-Type': 'application/json' }, body: JSON.stringify({ model: upstreamModel, messages, stream: true }) });
   if (!response.ok) { await response.body?.cancel(); throw Error(`Command Code HTTP ${response.status}; check key, plan access and quota.`); }
   let buffer = '', result = '', done = false;
   for await (const data of response.body.pipeThrough(new TextDecoderStream())) {

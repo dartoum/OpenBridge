@@ -1,4 +1,6 @@
-import { providerModels, publicIDs, availableModels, resolveModel, runCodex, runGemini, runCommandCode } from './providers.mjs';
+import { runCodex, runAntigravity, runCommandCode } from './providers.mjs';
+import { loadConfig, validateConfig, saveConfig, catalog, resolveConfiguredModel } from './config.mjs';
+import { diagnostics, discoverModels } from './diagnostics.mjs';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -11,7 +13,7 @@ export function validate(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw Error('Expected a JSON object');
   const allowed = new Set(['model', 'messages', 'stream']);
   for (const key of Object.keys(body)) if (!allowed.has(key)) throw Error(`Unsupported parameter: ${key}`);
-  if (!publicIDs.includes(body.model)) throw Error('Unsupported bridge model');
+  if (typeof body.model !== 'string' || body.model.length>220) throw Error('Unsupported bridge model');
   if (body.stream !== undefined && typeof body.stream !== 'boolean') throw Error('stream must be boolean');
   if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 200) throw Error('messages must contain 1–200 text messages');
   for (const m of body.messages) {
@@ -66,93 +68,97 @@ export function runClaude(messages, signal, onText, model = 'sonnet', binary = p
   });
 }
 
-export function runProvider(messages, signal, emit, model, settings = {}) {
-  const provider = providerModels[model]?.provider;
-  if (provider === 'claude') return runClaude(messages, signal, emit, model);
-  if (provider === 'chatgpt') return runCodex(messages, signal, emit);
-  if (provider === 'gemini') return runGemini(messages, signal, emit, model);
-  if (provider === 'commandcode') return runCommandCode(messages, signal, emit, model, { key: settings.commandCodeKey, upstreamModel: settings.commandCodeModel });
+export function runProvider(messages,signal,emit,id,settings={}) {
+  const {provider,modelSpec}=settings;
+  if(provider.type==='claude') return runClaude(messages,signal,emit,modelSpec.upstreamModel,provider.cliPath);
+  if(provider.type==='codex') return runCodex(messages,signal,emit,modelSpec.upstreamModel,provider.cliPath);
+  if(provider.type==='antigravity') return runAntigravity(messages,signal,emit,modelSpec.upstreamModel,provider.cliPath);
+  if(provider.type==='openai') return runCommandCode(messages,signal,emit,id,{key:settings.apiKey,upstreamModel:modelSpec.upstreamModel,baseURL:provider.baseURL,allowNoKey:provider.id!=='commandcode'});
   throw Error('Unsupported provider');
 }
 
-export function createBridge({ key, runner = runProvider, timeout = 120000, model = process.env.CLAUDE_MODEL || 'sonnet' } = {}) {
-  if (!key) throw Error('Bridge key required');
-  let active = false, currentController, activeModel = null;
-  let commandCodeKey = process.env.COMMAND_CODE_API_KEY, commandCodeModel = process.env.COMMAND_CODE_MODEL || 'deepseek/deepseek-v4-flash';
-  const stats = { startedAt: new Date().toISOString(), requests: 0, succeeded: 0, failed: 0, lastDurationMs: null };
-  const server = http.createServer(async (req, res) => {
-    const json = (status, value) => { if (!res.destroyed) { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)); } };
-    const error = (status, message) => json(status, { error: { message, type: 'bridge_error' } });
-    if (req.headers.origin) return error(403, 'Browser origins are disabled; call from your application backend');
-    const given = Buffer.from(req.headers.authorization || '');
-    const expected = Buffer.from(`Bearer ${key}`);
-    if (given.length !== expected.length || !timingSafeEqual(given, expected)) return error(401, 'Invalid bridge key');
-    if (req.url === '/bridge/status' && req.method === 'GET') return json(200, { service: 'openbridge', version: 3, model, activeModel, active, models: availableModels({ commandCodeKey }), commandCodeConfigured: Boolean(commandCodeKey), commandCodeModel, ...stats });
-    if (req.url === '/bridge/commandcode' && req.method === 'POST') {
-      try {
-        let input = '';
-        for await (const chunk of req) { input += chunk; if (Buffer.byteLength(input) > 8192) return error(413, 'Request too large'); }
-        const value = JSON.parse(input);
-        if (!value || typeof value.key !== 'string' || !value.key.trim() || value.key.length > 4096 || typeof value.model !== 'string' || !/^[a-zA-Z0-9_.:/-]{1,150}$/.test(value.model) || Object.keys(value).some(k => !['key', 'model'].includes(k))) return error(400, 'Expected API key and valid Command Code model ID');
-        commandCodeKey = value.key.trim(); commandCodeModel = value.model;
-        return json(200, { configured: true });
-      } catch { return error(400, 'Invalid Command Code settings'); }
-    }
-    if (req.url === '/bridge/model' && req.method === 'POST') {
-      try {
-        let input = '';
-        for await (const chunk of req) { input += chunk; if (Buffer.byteLength(input) > 1024) return error(413, 'Request too large'); }
-        const value = JSON.parse(input);
-        if (!value || !Object.hasOwn(providerModels, value.model) || Object.keys(value).length !== 1) return error(400, 'Unsupported model selection');
-        model = value.model;
-        return json(200, { model, activeModel });
-      } catch { return error(400, 'Invalid model request'); }
-    }
-    if (req.url === '/bridge/cancel' && req.method === 'POST') { currentController?.abort(); return json(200, { cancelled: active }); }
-    if (req.url === '/v1/models' && req.method === 'GET') return json(200, { object: 'list', data: publicIDs.map(id => ({ id, object: 'model', created: 0, owned_by: 'openbridge' })) });
-    if (req.url !== '/v1/chat/completions' || req.method !== 'POST') return error(404, 'Not found');
-    if (active) return error(429, 'Bridge busy; retry after the current request');
-    let body;
+async function readJSON(req, limit = 256 * 1024) {
+  const chunks=[]; let bytes=0;
+  for await (const chunk of req.iterator({destroyOnReturn:false})) { bytes+=chunk.length; if(bytes>limit) { req.resume(); throw Object.assign(Error('Request too large'),{status:413}); } chunks.push(chunk); }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+export function createBridge({ key, adminKey = key, runner = runProvider, timeout = 120000, model, configPath, config: suppliedConfig } = {}) {
+  if (!key || !adminKey) throw Error('Bridge and management keys required');
+  let config=validateConfig(structuredClone(suppliedConfig || loadConfig(configPath)));
+  if(model) config.selectedModel=resolveConfiguredModel(config,model)?.id || config.selectedModel;
+  let active=false, activeModel=null, currentController, checks={}, cachedDiagnostics=[];
+  const secrets={};
+  if(process.env.COMMAND_CODE_API_KEY) secrets.commandcode=process.env.COMMAND_CODE_API_KEY;
+  const stats={startedAt:new Date().toISOString(),requests:0,succeeded:0,failed:0,lastDurationMs:null};
+  const persist=next=>{saveConfig(configPath,next);config=next;};
+  const server=http.createServer(async(req,res)=>{
+    const json=(status,value)=>{if(!res.destroyed){res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(value));}};
+    const error=(status,message)=>json(status,{error:{message,type:'bridge_error'}});
+    if(req.headers.origin) return error(403,'Browser origins are disabled; call from your application backend');
+    const requiredKey=req.url?.startsWith('/bridge/')?adminKey:key;
+    const given=Buffer.from(req.headers.authorization||''),expected=Buffer.from(`Bearer ${requiredKey}`);
+    if(given.length!==expected.length||!timingSafeEqual(given,expected)) return error(401,'Invalid bridge key');
     try {
-      let input = '';
-      for await (const chunk of req) { input += chunk; if (Buffer.byteLength(input) > 256 * 1024) return error(413, 'Request exceeds 256 KiB'); }
-      body = validate(JSON.parse(input));
-    } catch (e) { return error(400, e.message); }
-    if (active) return error(429, 'Bridge busy; retry later');
-    active = true;
-    const requestModel = resolveModel(body.model, model);
-    activeModel = requestModel;
-    stats.requests++;
-    const requestStarted = Date.now();
-    const controller = new AbortController();
-    currentController = controller;
-    const timer = setTimeout(() => controller.abort(), timeout);
-    res.on('close', () => controller.abort());
-    const id = `chatcmpl-${randomUUID()}`, created = Math.floor(Date.now() / 1000);
-    let text = '', streaming = false;
-    const event = value => { if (!res.destroyed) res.write(`data: ${JSON.stringify(value)}\n\n`); };
-    const chunk = (delta, finish_reason = null) => event({ id, object: 'chat.completion.chunk', created, model: body.model, choices: [{ index: 0, delta, finish_reason }] });
-    try {
-      const result = await runner(body.messages, controller.signal, delta => {
-        text += delta;
-        if (text.length > 2 * 1024 * 1024) { controller.abort(); return; }
-        if (body.stream && !res.destroyed) {
-          if (!streaming) { res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }); streaming = true; chunk({ role: 'assistant' }); }
-          chunk({ content: delta });
-        }
-      }, requestModel, { commandCodeKey, commandCodeModel });
-      stats.succeeded++;
-      if (body.stream) {
-        if (!streaming) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); chunk({ role: 'assistant', content: result }); }
-        chunk({}, 'stop'); res.end('data: [DONE]\n\n');
-      } else json(200, { id, object: 'chat.completion', created, model: body.model, choices: [{ index: 0, message: { role: 'assistant', content: result }, finish_reason: 'stop' }] });
-    } catch (e) {
-      stats.failed++;
-      if (streaming) { event({ error: { message: e.message, type: 'bridge_error' } }); res.end(); }
-      else error(controller.signal.aborted ? 504 : 502, e.message);
-    } finally { clearTimeout(timer); active = false; currentController = undefined; activeModel = null; stats.lastDurationMs = Date.now() - requestStarted; }
+      if(req.url==='/bridge/status'&&req.method==='GET') return json(200,{service:'openbridge',version:5,model:config.selectedModel,selectedModelID:config.selectedModel,activeModel,active,models:catalog(config),config,diagnostics:cachedDiagnostics,checks,runtime:{version:process.version,path:process.execPath},credentialProviders:Object.keys(secrets),...stats});
+      if(req.url==='/bridge/config'&&req.method==='PUT') {
+        const next=validateConfig(await readJSON(req));
+        const changed=new Set(config.providers.filter(p=>JSON.stringify(p)!==JSON.stringify(next.providers.find(n=>n.id===p.id))).map(p=>p.id));
+        persist(next);checks=Object.fromEntries(Object.entries(checks).filter(([id])=>!changed.has(id.split('/')[0])));
+        return json(200,{saved:true});
+      }
+      if(req.url==='/bridge/diagnostics'&&req.method==='POST') {cachedDiagnostics=await diagnostics(config,secrets);return json(200,cachedDiagnostics);}
+      if(req.url==='/bridge/discover'&&req.method==='POST') {
+        const body=await readJSON(req,4096), provider=config.providers.find(p=>p.id===body.providerID);
+        if(!provider) return error(400,'Unknown provider');
+        return json(200,await discoverModels(provider,secrets[provider.id],AbortSignal.timeout(20000)));
+      }
+      if(req.url==='/bridge/credentials'&&req.method==='POST') {
+        const body=await readJSON(req,8192);
+        if(!config.providers.some(p=>p.id===body.providerID&&p.type==='openai')||typeof body.key!=='string'||body.key.length>4096) return error(400,'Invalid credential settings');
+        if(body.key.trim()) secrets[body.providerID]=body.key.trim();else delete secrets[body.providerID];
+        return json(200,{configured:Boolean(secrets[body.providerID])});
+      }
+      if(req.url==='/bridge/model'&&req.method==='POST') {
+        const body=await readJSON(req,4096), found=resolveConfiguredModel(config,body.model);
+        if(!found) return error(400,'Model unknown or disabled');
+        const next=structuredClone(config);next.selectedModel=found.id;persist(next);
+        return json(200,{model:found.id,activeModel});
+      }
+      if(req.url==='/bridge/cancel'&&req.method==='POST') {currentController?.abort();return json(200,{cancelled:active});}
+      if(req.url==='/v1/models'&&req.method==='GET') return json(200,{object:'list',data:catalog(config).filter(m=>m.enabled).map(m=>({id:m.id,object:'model',created:0,owned_by:m.providerID}))});
+      if(req.url!=='/v1/chat/completions'||req.method!=='POST') return error(404,'Not found');
+      if(active) return error(429,'Bridge busy; retry after the current request');
+      let body;
+      try{body=validate(await readJSON(req));}catch(e){return error(e.status||400,e.message);}
+      if(active) return error(429,'Bridge busy; retry later');
+      const selected=resolveConfiguredModel(config,body.model);
+      if(!selected) return error(400,'Model unknown or disabled');
+      const provider=structuredClone(config.providers.find(p=>p.id===selected.providerID));
+      const spec=structuredClone(selected);
+      const settings={provider,modelSpec:spec,apiKey:secrets[provider.id],commandCodeKey:secrets.commandcode,commandCodeModel:spec.upstreamModel};
+      active=true;activeModel=spec.id;stats.requests++;
+      const started=Date.now(),controller=new AbortController();currentController=controller;
+      const timer=setTimeout(()=>controller.abort(),timeout);
+      res.on('close',()=>controller.abort());
+      const id=`chatcmpl-${randomUUID()}`,created=Math.floor(Date.now()/1000);
+      let streaming=false,text='';
+      const event=value=>{if(!res.destroyed)res.write(`data: ${JSON.stringify(value)}\n\n`);};
+      const chunk=(delta,finish_reason=null)=>event({id,object:'chat.completion.chunk',created,model:spec.id,choices:[{index:0,delta,finish_reason}]});
+      try{
+        const result=await runner(body.messages,controller.signal,delta=>{
+          text+=delta;if(text.length>2*1024*1024){controller.abort();return;}
+          if(body.stream&&!res.destroyed){if(!streaming){res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache'});streaming=true;chunk({role:'assistant'});}chunk({content:delta});}
+        },spec.id,settings);
+        stats.succeeded++;checks[spec.id]={success:true,at:new Date().toISOString(),durationMs:Date.now()-started};
+        if(body.stream){if(!streaming){res.writeHead(200,{'Content-Type':'text/event-stream'});chunk({role:'assistant',content:result});}chunk({},'stop');res.end('data: [DONE]\n\n');}
+        else json(200,{id,object:'chat.completion',created,model:spec.id,choices:[{index:0,message:{role:'assistant',content:result},finish_reason:'stop'}]});
+      }catch(e){
+        stats.failed++;checks[spec.id]={success:false,at:new Date().toISOString(),durationMs:Date.now()-started,message:e.message};
+        if(streaming){event({error:{message:e.message,type:'bridge_error'}});res.end();}else error(controller.signal.aborted?504:502,e.message);
+      }finally{clearTimeout(timer);active=false;activeModel=null;currentController=undefined;stats.lastDurationMs=Date.now()-started;}
+    }catch(e){error(e.status||400,e.message);}
   });
-  server.cancelActive = () => currentController?.abort();
+  server.cancelActive=()=>currentController?.abort();
   return server;
 }
 
@@ -162,7 +168,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     try { key = readFileSync('.bridge-key', 'utf8').trim(); }
     catch (e) { if (e.code !== 'ENOENT') throw e; key = randomBytes(32).toString('hex'); writeFileSync('.bridge-key', key + '\n', { mode: 0o600, flag: 'wx' }); }
   }
-  const server = createBridge({ key });
+  let adminKey;
+  try { adminKey=readFileSync('.bridge-admin-key','utf8').trim(); }
+  catch(e) { if(e.code!=='ENOENT') throw e; adminKey=randomBytes(32).toString('hex');writeFileSync('.bridge-admin-key',adminKey+'\n',{mode:0o600,flag:'wx'}); }
+  const server = createBridge({ key, adminKey, configPath:process.env.BRIDGE_CONFIG_PATH || join(process.cwd(),'.bridge-config.json') });
   server.listen(Number(process.env.PORT || 8000), '127.0.0.1', () => console.log('OpenBridge: http://127.0.0.1:' + server.address().port + '/v1 (key in .bridge-key or BRIDGE_API_KEY)'));
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {
     server.cancelActive();

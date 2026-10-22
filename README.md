@@ -1,120 +1,130 @@
 # OpenBridge
 
-A local, text-only OpenAI Chat Completions bridge with a native macOS menu bar app.
-Claude Code and Codex use their existing account logins; Google uses the official
-Gemini CLI; Command Code uses its official Provider API with your GOAT account.
-No OpenRouter or automatic provider/API-key fallback.
+A native macOS provider manager and a local OpenAI Chat Completions text API.
+Connect your other projects to one endpoint, with explicit control over provider,
+model selection, installed CLI paths and request status.
 
-## Run
+## Build and open
 
-Requires Node.js 22+ and the installed Claude/Codex CLI for their respective routes.
+Requires macOS 14+, Xcode command-line tools and Node.js 22+ **to build**.
+The resulting app bundles Node and the server sources, so it no longer needs the
+checkout or a separately installed Node at runtime. The app is built for the
+host architecture and locally signed, not notarized for public distribution.
 
 ```sh
-npm ci
 scripts/build-menubar.sh
 open build/OpenBridge.app
 ```
 
-Click the bridge icon, then **Start bridge**. Choose a provider/model while running.
-An active request retains its original provider/model. Later requests use your choice.
-The menu shows success/failure counters and duration since the server started.
-A bridge started outside the app is detected but never killed by the app.
-Quitting stops the app-owned bridge. No login item is installed.
+The window opens on launch. **Start bridge** opens `127.0.0.1:8000`. The bridge
+icon keeps a compact menu for start/stop, cancellation and reopening management.
+Closing the window leaves the bridge running; quitting stops its own server.
+Externally started servers are not killed.
 
-For terminal use: `npm start`. Set `PORT` (default 8000) or `BRIDGE_API_KEY` to override.
-The first start creates owner-only `.bridge-key`; never commit or share it.
+## Provider management
+
+The sidebar contains Claude Pro, ChatGPT, Google AI Pro and Command Code GOAT.
+For a CLI provider, choose its executable path, open official install instructions,
+start interactive login, and refresh installation/account checks. These checks
+are separate from the **Test** button, which makes a real quota-consuming request.
+
+**Provider toevoegen** adds an OpenAI-compatible endpoint with an optional key
+and an initial model ID. API keys go in macOS Keychain, not the configuration
+file. For Command Code, enter its key and select a model included in your plan.
+No Command Code CLI is required. GOAT usage is metered against plan credits;
+provider rules may also consume purchased top-ups. OpenBridge buys nothing and
+cannot enforce a provider-side plan-only spending lock.
+
+Models can be added manually. API and Antigravity model discovery are supported;
+newly discovered models are initially off. Changes require **Bewaar wijzigingen**.
+Disabled models disappear from the API model list and are refused by direct ID.
+A configuration change does not alter an already-running request.
+
+The normal API key cannot access configuration, credentials or management routes.
+The app uses a separate local management key that is never included in copied
+connection details.
 
 ## Connect another app
 
 | Field | Value |
 |---|---|
-| Provider type | OpenAI-compatible / Chat Completions |
+| API type | OpenAI-compatible / Chat Completions |
 | Base URL | `http://127.0.0.1:8000/v1` |
-| API key | Use **Kopieer API-sleutel** in the menu (the local bridge key) |
-| Model | `subscription` |
+| API key | **Kopieer API-sleutel** / **Kopieer alle verbindingsgegevens** |
+| Model | Concrete model ID copied from the GUI, e.g. `claude/sonnet` |
 
-If an app asks for a full endpoint use `http://127.0.0.1:8000/v1/chat/completions`.
-**Kopieer alle verbindingsgegevens** copies all settings. Keys for external providers
-are configured in OpenBridge, never passed to your other apps.
+Full endpoint if requested: `http://127.0.0.1:8000/v1/chat/completions`.
+**Kopieer model-ID** now copies the actual selection, not the generic alias.
+A project's concrete ID stays on that model when the GUI selection changes.
+The optional `subscription` alias follows the selection for future calls.
 
-`subscription` follows the menu selection. Explicit IDs keep a project on one provider:
+Default examples:
 
-| Model ID | Backend |
-|---|---|
-| `claude-subscription` | Claude Sonnet/Opus/Haiku; Sonnet if the menu selects another provider |
-| `chatgpt-subscription` | Codex with ChatGPT login, CLI default model |
-| `gemini-subscription` | Gemini Auto/Pro/Flash; Auto if the menu selects another provider |
-| `commandcode-goat` | Command Code Provider API, configured model |
+- `claude/sonnet`, `claude/opus`, `claude/haiku`
+- `chatgpt/default` (Codex's default model; add an explicit model ID if desired)
+- `google/gemini-3.8-flash-medium`, `google/gemini-4-argon-medium`
+- `commandcode/deepseek/deepseek-v4-flash`
 
-The model list advertises routes, not proof of an authenticated account or entitlement.
-Missing login/key or provider quota produces an error. No silent fallback.
+The IDs for manually added/discovered models are shown in their provider page.
+Legacy `claude-subscription`, `chatgpt-subscription`, `gemini-subscription` and
+`commandcode-goat` still route for existing clients, but are not advertised.
 
-## Accounts
+## Account routes and current limits
 
-**Claude:** existing Claude account login. Tools, skills, custom MCP and session
-persistence disabled. Runs in an empty temporary directory, with safe mode.
+Claude uses its existing account login with safe mode, no tools/MCP/skills or
+session persistence. Codex forces ChatGPT login, ignores user configuration,
+uses an empty read-only workspace and disables shell/apps/plugins/hooks/browser
+features. No API key fallback for subscription routes. Codex can emit its answer
+at completion rather than token by token. CLI history is serialized as text,
+not native multi-role history. API endpoints preserve message roles.
 
-**ChatGPT:** existing `codex login` with ChatGPT. Forced ChatGPT authentication;
-API environment keys removed. Uses `codex exec --ignore-user-config --ephemeral`
-in an empty read-only workspace with shell, apps, plugins, hooks, browser,
-computer-use and multi-agent features disabled. Unsupported tool events fail.
-Codex emits completed message events, so its SSE may arrive at message completion,
-not token by token. This is Codex access through your plan, not ChatGPT web model parity.
+**Google correction:** consumer Gemini CLI support ended June 18, 2026. The old
+Gemini npm dependency and login script have been removed. The route now targets
+Antigravity CLI (`agy`) and uses live model slugs from `agy models`.
 
-**Google:** use **Google aanmelden…** to open the official Gemini CLI in Terminal.
-Choose Google sign-in using the account associated with Google AI Pro. Finish
-browser login, then quit that CLI; the bridge reuses its official auth cache.
-The bridge forces Google-account authentication, removes API key/Vertex variables,
-disables tools/MCP/hooks/skills/extensions and uses an empty working directory.
-Gemini CLI can keep session/account metadata in its own `~/.gemini` directory;
-OpenBridge does not read or copy its credential files.
+**Google blocker:** standalone agy produced a real answer, but the installed CLI
+exposes its full tool set even when the custom primary agent requests no tools.
+OpenBridge refuses that init event. Google inference through the bridge is thus
+not yet working; the GUI test shows the failure rather than claiming readiness.
+Initial streaming attempts also failed with `trajectory not found`; single-prompt
+mode avoids that protocol path. No global provider permissions were changed.
 
-**Command Code:** create a key in Command Code Studio, then use
-**Command Code instellen…**. Enter the key and an exact model ID from their models
-list. The key is stored in the app's own macOS Keychain item; the running bridge
-receives it locally and holds it in memory. The default model ID is
-`deepseek/deepseek-v4-flash` (documented example, not account entitlement proof).
-You can also set `COMMAND_CODE_API_KEY` and `COMMAND_CODE_MODEL` when starting manually.
+The API is text-only: `model`, `messages`, `stream`, with string
+system/user/assistant messages. Unknown fields, tool calls, images, JSON mode,
+embeddings and Responses API are unsupported. Browser origins are blocked; call
+from a backend on this Mac. One request at a time (429 while busy), 120-second
+timeout and cancellation. No invented token counts or remaining-quota estimates.
 
-GOAT officially includes API access, metered against its plan credits. Provider
-rules may consume purchased top-up credits after limits; this adapter cannot
-verify or enforce a plan-only billing lock. No credit purchases or top-ups are made.
-Some upstream models require a different API format; this adapter supports only
-models that work on Command Code's Chat Completions endpoint.
+## State and verification
 
-## Scope and verification
-
-Routes: `GET /v1/models`, `POST /v1/chat/completions`.
-Accepted fields: `model`, `messages`, `stream`; string system/user/assistant messages.
-Unsupported parameters, tools, images, JSON mode, embeddings and Responses API
-are rejected. Call from the backend of apps on this Mac; browser origins are blocked.
-
-Claude/Codex/Gemini history is serialized as text, not native multi-role history;
-Claude system instructions use the CLI system prompt. Command Code preserves roles.
-No usage counters are guessed and no account quota balance is inferred.
-One request at a time (429 when busy), 120-second timeout, cancellable from the menu.
-Counters exclude invalid/unauthenticated/busy requests. No prompt logs in this app.
+App state: `~/Library/Application Support/OpenBridge/` contains `config.json`,
+`.bridge-key` and `.bridge-admin-key` (owner-only). Existing local bridge keys
+are preserved on first launch. Credentials stay in Keychain. The app does not
+read/copy provider auth files. Official CLIs can retain their own account/session
+metadata. No prompt or answer logs are kept by OpenBridge.
 
 ```sh
 npm test
-node scripts/smoke.mjs --stream
-BRIDGE_MODEL=chatgpt-subscription node scripts/smoke.mjs
-BRIDGE_MODEL=gemini-subscription node scripts/smoke.mjs
-BRIDGE_MODEL=commandcode-goat node scripts/smoke.mjs
 ```
 
-Smoke requests consume the chosen account's quota. Automated tests use fixtures.
-Live verified: Claude Sonnet and ChatGPT/Codex. Google requires login; Command Code
-requires your key; their adapters are fixture-tested, not yet live-proven.
-Menu build succeeds; native UI automation timed out, so full menu and Keychain
-interaction need user acceptance. The locally signed development app is tied to
-this checkout and the Node path at build time. Rebuild if either moves.
+CLI-only mode remains available via `npm start` (uses cwd for local state).
+Smoke against the GUI-owned server with its local client key:
 
-Authenticated management endpoints: `/bridge/status`, `/bridge/model`,
-`/bridge/cancel`, `/bridge/commandcode`. Do not expose the listener beyond loopback.
-Official CLI automation does not imply a blanket guarantee about subscription
-terms or account safety for general-purpose API use.
+```sh
+BRIDGE_KEY_FILE="$HOME/Library/Application Support/OpenBridge/.bridge-key" \
+  BRIDGE_MODEL=claude/sonnet node scripts/smoke.mjs --stream
+```
 
-Sources: [Codex automation](https://learn.chatgpt.com/docs/non-interactive-mode),
-[Google authentication](https://geminicli.com/docs/get-started/authentication/),
+Fifteen fixture-backed tests cover routing, config persistence, disabled models,
+authentication, admin separation, SSE, cancellation and errors. GUI acceptance
+verified the window, real copy/paste of `claude/sonnet`, live Claude testing, and
+adding/testing/disabling a temporary local API provider. The disabled model was
+absent from `/v1/models` and direct requests returned 400; the fixture provider
+and server were removed. ChatGPT was live-verified in the earlier bridge.
+Command Code awaits the user's API key. Google remains blocked as above.
+A clean-Mac install and Keychain entry roundtrip are not yet verified.
+
+Sources: [Google transition](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/),
+[Antigravity headless](https://antigravity.google/docs/cli/headless),
+[Codex automation](https://learn.chatgpt.com/docs/non-interactive-mode),
 [Command Code API](https://commandcode.ai/docs/provider).

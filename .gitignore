@@ -4,3 +4,7 @@
 build/
 
 node_modules/
+
+.bridge-config.json*
+
+.bridge-admin-key
