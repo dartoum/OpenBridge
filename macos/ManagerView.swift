@@ -158,7 +158,6 @@ struct Overview: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(app.message).font(.title2.bold())
-                        Text("Your subscriptions, available through one local API.").foregroundStyle(.secondary)
                     }
                     Spacer()
                     Button(app.child == nil && app.snapshot == nil ? "Start bridge" : "Stop bridge") { app.child == nil && app.snapshot == nil ? app.start() : app.stop() }
