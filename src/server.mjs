@@ -20,10 +20,10 @@ export function validate(body) {
   return body;
 }
 
-export function runClaude(messages, signal, onText, binary = process.env.CLAUDE_BIN || join(homedir(), '.local/bin/claude')) {
+export function runClaude(messages, signal, onText, model = 'sonnet', binary = process.env.CLAUDE_BIN || join(homedir(), '.local/bin/claude')) {
   return new Promise((resolve, reject) => {
     const system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
-    const args = ['--model', process.env.CLAUDE_MODEL || 'sonnet', '-p', '--safe-mode', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-session-persistence', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--system-prompt', system || 'You are a helpful text assistant. Answer the user directly.'];
+    const args = ['--model', model, '-p', '--safe-mode', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-session-persistence', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--system-prompt', system || 'You are a helpful text assistant. Answer the user directly.'];
     const env = { ...process.env };
     // This adapter only uses the existing Claude account login, never API billing.
     for (const key of Object.keys(env)) if (/^(ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDECODE$)/.test(key)) delete env[key];
@@ -67,7 +67,7 @@ export function runClaude(messages, signal, onText, binary = process.env.CLAUDE_
 
 export function createBridge({ key, runner = runClaude, timeout = 120000, model = process.env.CLAUDE_MODEL || 'sonnet' } = {}) {
   if (!key) throw Error('Bridge key required');
-  let active = false, currentController;
+  let active = false, currentController, activeModel = null;
   const stats = { startedAt: new Date().toISOString(), requests: 0, succeeded: 0, failed: 0, lastDurationMs: null };
   const server = http.createServer(async (req, res) => {
     const json = (status, value) => { if (!res.destroyed) { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)); } };
@@ -76,7 +76,17 @@ export function createBridge({ key, runner = runClaude, timeout = 120000, model 
     const given = Buffer.from(req.headers.authorization || '');
     const expected = Buffer.from(`Bearer ${key}`);
     if (given.length !== expected.length || !timingSafeEqual(given, expected)) return error(401, 'Invalid bridge key');
-    if (req.url === '/bridge/status' && req.method === 'GET') return json(200, { service: 'openbridge', version: 1, model, active, ...stats });
+    if (req.url === '/bridge/status' && req.method === 'GET') return json(200, { service: 'openbridge', version: 2, model, activeModel, active, ...stats });
+    if (req.url === '/bridge/model' && req.method === 'POST') {
+      try {
+        let input = '';
+        for await (const chunk of req) { input += chunk; if (Buffer.byteLength(input) > 1024) return error(413, 'Request too large'); }
+        const value = JSON.parse(input);
+        if (!value || !['sonnet', 'opus', 'haiku'].includes(value.model) || Object.keys(value).length !== 1) return error(400, 'Expected model: sonnet, opus or haiku');
+        model = value.model;
+        return json(200, { model, activeModel });
+      } catch { return error(400, 'Invalid model request'); }
+    }
     if (req.url === '/bridge/cancel' && req.method === 'POST') { currentController?.abort(); return json(200, { cancelled: active }); }
     if (req.url === '/v1/models' && req.method === 'GET') return json(200, { object: 'list', data: [{ id: 'claude-subscription', object: 'model', created: 0, owned_by: 'openbridge' }] });
     if (req.url !== '/v1/chat/completions' || req.method !== 'POST') return error(404, 'Not found');
@@ -89,6 +99,8 @@ export function createBridge({ key, runner = runClaude, timeout = 120000, model 
     } catch (e) { return error(400, e.message); }
     if (active) return error(429, 'Bridge busy; retry later');
     active = true;
+    activeModel = model;
+    const requestModel = model;
     stats.requests++;
     const requestStarted = Date.now();
     const controller = new AbortController();
@@ -107,7 +119,7 @@ export function createBridge({ key, runner = runClaude, timeout = 120000, model 
           if (!streaming) { res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' }); streaming = true; chunk({ role: 'assistant' }); }
           chunk({ content: delta });
         }
-      });
+      }, requestModel);
       stats.succeeded++;
       if (body.stream) {
         if (!streaming) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); chunk({ role: 'assistant', content: result }); }
@@ -117,7 +129,7 @@ export function createBridge({ key, runner = runClaude, timeout = 120000, model 
       stats.failed++;
       if (streaming) { event({ error: { message: e.message, type: 'bridge_error' } }); res.end(); }
       else error(controller.signal.aborted ? 504 : 502, e.message);
-    } finally { clearTimeout(timer); active = false; currentController = undefined; stats.lastDurationMs = Date.now() - requestStarted; }
+    } finally { clearTimeout(timer); active = false; currentController = undefined; activeModel = null; stats.lastDurationMs = Date.now() - requestStarted; }
   });
   server.cancelActive = () => currentController?.abort();
   return server;

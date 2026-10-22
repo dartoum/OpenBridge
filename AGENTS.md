@@ -16,5 +16,5 @@ Never commit `.bridge-key`, credentials, prompts or response logs.
 
 The native AppKit menu bar controller is built with scripts/build-menubar.sh;
 it controls only its own child process. Do not kill externally started servers.
-Model selection changes the CLI model for the next server start; the public
+Model selection changes the CLI model for the next request, keeping active requests fixed; the public
 model ID remains claude-subscription. Runtime request counters contain no prompts.

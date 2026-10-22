@@ -82,18 +82,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = add("Annuleer aanvraag", action: #selector(cancel), enabled: busy)
         let models = NSMenu(); models.autoenablesItems = false
         for name in ["sonnet", "opus", "haiku"] {
-            let entry = add(name.capitalized, action: #selector(selectModel(_:)), enabled: !running && child == nil, to: models)
+            let entry = add(name.capitalized, action: #selector(selectModel(_:)), enabled: true, to: models)
             entry.representedObject = name
-            entry.state = name == selectedModel ? .on : .off
+            entry.state = name == (status?["model"] as? String ?? selectedModel) ? .on : .off
         }
-        let modelItem = NSMenuItem(title: "Model voor volgende start", action: nil, keyEquivalent: "")
+        let modelItem = NSMenuItem(title: "Model voor nieuwe aanvragen", action: nil, keyEquivalent: "")
         modelItem.submenu = models; menu.addItem(modelItem)
-        if running { _ = add("Stop eerst om van model te wisselen") }
+        if busy, let model = status?["activeModel"] as? String { _ = add("Lopende aanvraag: \(model)") }
         menu.addItem(.separator())
         _ = add("Aanvragen sinds serverstart")
         _ = add("Geslaagd: \(status?["succeeded"] as? Int ?? 0)   ·   Mislukt: \(status?["failed"] as? Int ?? 0)")
         if let duration = status?["lastDurationMs"] as? Int { _ = add(String(format: "Laatste aanvraag: %.1f s", Double(duration) / 1000)) }
         menu.addItem(.separator())
+        _ = add("Kopieer alle verbindingsgegevens", action: #selector(copyConfig), enabled: key != nil)
         _ = add("Kopieer API-adres", action: #selector(copyURL))
         _ = add("Kopieer API-sleutel", action: #selector(copyKey), enabled: key != nil)
         _ = add("Kopieer model-ID", action: #selector(copyModel))
@@ -159,8 +160,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         URLSession.shared.dataTask(with: request) { _, _, _ in }.resume()
     }
     @objc func selectModel(_ sender: NSMenuItem) {
-        guard status == nil, child == nil, let value = sender.representedObject as? String else { return }
-        UserDefaults.standard.set(value, forKey: "ClaudeModel"); rebuild()
+        guard let value = sender.representedObject as? String else { return }
+        guard status != nil else { UserDefaults.standard.set(value, forKey: "ClaudeModel"); rebuild(); return }
+        guard let key else { return }
+        var request = URLRequest(url: URL(string: endpoint + "/bridge/model")!)
+        request.httpMethod = "POST"; request.timeoutInterval = 3
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["model": value])
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            Task { @MainActor in
+                if (response as? HTTPURLResponse)?.statusCode == 200 {
+                    UserDefaults.standard.set(value, forKey: "ClaudeModel")
+                    self.status?["model"] = value
+                    self.rebuild(); self.poll()
+                } else { self.show("Model wijzigen mislukt. \(error?.localizedDescription ?? "Herstart de bridge om de nieuwste versie te laden.")") }
+            }
+        }.resume()
+    }
+    @objc func copyConfig() {
+        guard let key else { return }
+        copy("API-type: OpenAI Chat Completions\nBase URL: \(endpoint)/v1\nAPI key: \(key)\nModel: claude-subscription\n")
     }
     func copy(_ value: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value, forType: .string) }
     @objc func copyURL() { copy(endpoint + "/v1") }

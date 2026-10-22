@@ -69,8 +69,8 @@ open build/OpenBridge.app
 ```
 
 Click the bridge icon in the menu bar. Start/stop the bridge, cancel the active request,
-choose Sonnet/Opus/Haiku while stopped, and copy the endpoint, key or model ID.
-The model choice persists; requests to `claude-subscription` use that choice.
+choose Sonnet/Opus/Haiku at any time, and copy the endpoint, key or model ID.
+The model choice persists; new requests to `claude-subscription` use that choice. An active request keeps its original model.
 These aliases resolve through the installed Claude CLI and depend on your plan.
 Only Sonnet has been live-tested for this release. No quota balance is inferred.
 
@@ -84,5 +84,5 @@ Close an old terminal bridge before starting one from the app.
 
 This is a locally signed development app tied to this checkout and the Node path
 found during build. Rebuild if either moves. No login-item or background service
-is installed. The authenticated `/bridge/status` and `/bridge/cancel` endpoints
+is installed. The authenticated `/bridge/status`, `/bridge/model` and `/bridge/cancel` endpoints
 support the app. Normal API clients still use `/v1`.

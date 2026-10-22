@@ -60,3 +60,28 @@ test('cancellation and concurrent request limit', async t => {
   const status = await (await fetch(base + '/bridge/status', { headers })).json();
   assert.equal(status.failed, 1); assert.equal(status.model, 'opus'); assert.equal(status.active, false);
 });
+
+test('model changes apply to the next request while the active model remains fixed', async t => {
+  let release, started;
+  const ready = new Promise(r => { started = r; });
+  const models = [];
+  const server = createBridge({ key: 'test', model: 'sonnet', runner: async (m, signal, emit, model) => {
+    models.push(model);
+    if (models.length === 1) { started(); await new Promise(r => { release = r; }); }
+    return model;
+  } });
+  await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const headers = { Authorization: 'Bearer test' };
+  const post = (path, body) => fetch(base + path, { method: 'POST', headers, body: JSON.stringify(body) });
+  const body = { model: 'claude-subscription', messages: [{ role: 'user', content: 'hello' }] };
+  const first = post('/v1/chat/completions', body); await ready;
+  assert.equal((await post('/bridge/model', { model: 'opus' })).status, 200);
+  const status = await (await fetch(base + '/bridge/status', { headers })).json();
+  assert.equal(status.model, 'opus'); assert.equal(status.activeModel, 'sonnet');
+  assert.equal((await post('/bridge/model', { model: 'invalid' })).status, 400);
+  assert.equal((await fetch(base + '/bridge/model', { method: 'POST', body: '{}' })).status, 401);
+  release(); assert.equal((await (await first).json()).choices[0].message.content, 'sonnet');
+  assert.equal((await (await post('/v1/chat/completions', body)).json()).choices[0].message.content, 'opus');
+  assert.deepEqual(models, ['sonnet', 'opus']);
+});
