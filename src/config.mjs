@@ -7,7 +7,7 @@ const model = (provider, upstreamModel, name) => ({ id:`${provider}/${upstreamMo
 export function defaultConfig() {
   return { version:1, selectedModel:'claude/sonnet', providers:[
     { id:'claude', name:'Claude Pro', type:'claude', enabled:true, cliPath:process.env.CLAUDE_BIN || join(homedir(),'.local/bin/claude'), baseURL:'', models:[model('claude','sonnet','Sonnet'),model('claude','opus','Opus'),model('claude','haiku','Haiku')] },
-    { id:'chatgpt', name:'ChatGPT', type:'codex', enabled:true, cliPath:process.env.CODEX_BIN || join(homedir(),'.local/bin/codex'), baseURL:'', models:[model('chatgpt','default','Codex · standaardmodel')] },
+    { id:'chatgpt', name:'ChatGPT', type:'codex', enabled:true, cliPath:process.env.CODEX_BIN || join(homedir(),'.local/bin/codex'), baseURL:'', models:[model('chatgpt','default','Codex · default model')] },
     { id:'google', name:'Google AI Pro', type:'antigravity', enabled:true, cliPath:process.env.AGY_BIN || join(homedir(),'.local/bin/agy'), baseURL:'', models:[model('google','gemini-3.8-flash-medium','Gemini 3.8 Flash (Medium)'),model('google','gemini-4-argon-medium','Gemini 4 Argon (Medium)')] },
     { id:'commandcode', name:'Command Code GOAT', type:'openai', enabled:true, cliPath:'', baseURL:'https://api.commandcode.ai/provider/v1', models:[model('commandcode','deepseek/deepseek-v4-flash','DeepSeek V4 Flash')] },
   ] };
@@ -39,7 +39,12 @@ export function validateConfig(value) {
 }
 export function loadConfig(path) {
   if (!path) return defaultConfig();
-  try { return validateConfig(JSON.parse(readFileSync(path,'utf8'))); }
+  try {
+    const value=validateConfig(JSON.parse(readFileSync(path,'utf8')));
+    const shipped=value.providers.find(p=>p.id==='chatgpt')?.models.find(m=>m.id==='chatgpt/default');
+    if(shipped?.name==='Codex · standaardmodel') shipped.name='Codex · default model';
+    return value;
+  }
   catch(e) { if(e.code==='ENOENT') return defaultConfig(); throw e; }
 }
 export function saveConfig(path, value) {

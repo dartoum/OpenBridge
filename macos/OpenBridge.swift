@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     var window: NSWindow?
     @Published var child: Process?
     @Published var snapshot: BridgeSnapshot?
-    @Published var message = "Gestopt"
+    @Published var message = "Stopped"
     @Published var feedback: String?
     @Published var checking = false
     @Published var saving = false
@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 try existing.write(to: target, options: .atomic)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
             }
-        } catch { feedback = "Instellingenmap openen mislukt: \(error.localizedDescription)" }
+        } catch { feedback = "Could not open settings folder: \(error.localizedDescription)" }
     }
     // Small template glyph: two bridge piers, a deck and a single arch.
     func bridgeIcon() -> NSImage {
@@ -67,10 +67,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let mainMenu = NSMenu()
         let applicationItem = NSMenuItem()
         let applicationMenu = NSMenu()
-        applicationMenu.addItem(withTitle: "Sluit OpenBridge", action: #selector(quit), keyEquivalent: "q").target = self
+        applicationMenu.addItem(withTitle: "Quit OpenBridge", action: #selector(quit), keyEquivalent: "q").target = self
         applicationItem.submenu = applicationMenu; mainMenu.addItem(applicationItem)
-        let editItem = NSMenuItem(); let editMenu = NSMenu(title: "Wijzig")
-        for (title, action, key) in [("Maak ongedaan", "undo:", "z"), ("Knip", "cut:", "x"), ("Kopieer", "copy:", "c"), ("Plak", "paste:", "v"), ("Selecteer alles", "selectAll:", "a")] {
+        let editItem = NSMenuItem(); let editMenu = NSMenu(title: "Edit")
+        for (title, action, key) in [("Undo", "undo:", "z"), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select all", "selectAll:", "a")] {
             editMenu.addItem(withTitle: title, action: Selector(action), keyEquivalent: key)
         }
         editItem.submenu = editMenu; mainMenu.addItem(editItem); NSApp.mainMenu = mainMenu
@@ -91,16 +91,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             entry.target = self; entry.isEnabled = enabled && action != nil; menu.addItem(entry)
         }
         add("OpenBridge · \(message)", nil)
-        add("Open beheer…", #selector(openManager))
+        add("Open manager…", #selector(openManager))
         menu.addItem(.separator())
         add("Start bridge", #selector(start), child == nil && snapshot == nil)
         add("Stop bridge", #selector(stop), child != nil)
-        add("Annuleer aanvraag", #selector(cancel), snapshot?.active == true)
+        add("Cancel request", #selector(cancel), snapshot?.active == true)
         menu.addItem(.separator())
-        add("Kopieer model-ID", #selector(copyModel), snapshot != nil)
-        add("Kopieer alle verbindingsgegevens", #selector(copyConfig), snapshot != nil)
+        add("Copy model ID", #selector(copyModel), snapshot != nil)
+        add("Copy connection settings", #selector(copyConfig), snapshot != nil)
         menu.addItem(.separator())
-        add("Sluit OpenBridge", #selector(quit))
+        add("Quit OpenBridge", #selector(quit))
         item.menu = menu
         item.button?.toolTip = "OpenBridge — \(message)"
     }
@@ -119,7 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         NSApp.activate(ignoringOtherApps: true)
     }
     func request(_ path: String, method: String = "GET", body: Data? = nil, timeout: TimeInterval = 20, completion: @escaping @MainActor (Result<Data, Error>) -> Void) {
-        guard let key = path.hasPrefix("/bridge/") ? adminKey : bridgeKey else { completion(.failure(NSError(domain: "OpenBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "Start eerst de bridge."]))); return }
+        guard let key = path.hasPrefix("/bridge/") ? adminKey : bridgeKey else { completion(.failure(NSError(domain: "OpenBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "Start the bridge first."]))); return }
         var req = URLRequest(url: URL(string: endpoint + path)!)
         req.httpMethod = method; req.httpBody = body; req.timeoutInterval = timeout
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
@@ -132,7 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 else {
                     let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                     let error = json?["error"] as? [String: Any]
-                    completion(.failure(NSError(domain: "OpenBridge", code: (response as? HTTPURLResponse)?.statusCode ?? 0, userInfo: [NSLocalizedDescriptionKey: error?["message"] as? String ?? "Bridge niet bereikbaar"])))
+                    completion(.failure(NSError(domain: "OpenBridge", code: (response as? HTTPURLResponse)?.statusCode ?? 0, userInfo: [NSLocalizedDescriptionKey: error?["message"] as? String ?? "Bridge unavailable"])))
                 }
             }
         }.resume()
@@ -147,7 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             case .success(let data):
                 do {
                     self.snapshot = try JSONDecoder().decode(BridgeSnapshot.self, from: data)
-                    self.message = self.snapshot?.active == true ? "Bezig" : "Actief"
+                    self.message = self.snapshot?.active == true ? "Busy" : "Running"
                     if !self.hydratedKeys {
                         self.hydratedKeys = true
                         if self.child != nil {
@@ -157,15 +157,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                         }
                         self.refreshChecks()
                     }
-                } catch { self.snapshot = nil; self.message = "Herstart nodig voor nieuwe versie" }
-            case .failure: self.snapshot = nil; self.message = self.child == nil ? "Gestopt" : "Starten…"
+                } catch { self.snapshot = nil; self.message = "Restart required for the new version" }
+            case .failure: self.snapshot = nil; self.message = self.child == nil ? "Stopped" : "Starting…"
             }
             self.rebuildMenu()
         }
     }
     @objc func start() {
         guard child == nil, snapshot == nil else { return }
-        guard FileManager.default.isExecutableFile(atPath: node) else { feedback = "De meegeleverde Node-runtime ontbreekt. Bouw de app opnieuw."; openManager(); return }
+        guard FileManager.default.isExecutableFile(atPath: node) else { feedback = "The bundled Node runtime is missing. Rebuild the app."; openManager(); return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: node)
         process.arguments = [root.appendingPathComponent("src/server.mjs").path]
@@ -176,11 +176,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         env["PATH"] = "/usr/local/bin:/opt/homebrew/bin:\(NSHomeDirectory())/.local/bin:/usr/bin:/bin"
         process.environment = env
         process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
-        process.terminationHandler = { process in Task { @MainActor in self.child = nil; self.snapshot = nil; self.hydratedKeys = false; self.message = process.terminationStatus == 0 ? "Gestopt" : "Start mislukt (\(process.terminationStatus))"; self.rebuildMenu() } }
-        do { try process.run(); child = process; message = "Starten…"; hydratedKeys = false; rebuildMenu() }
-        catch { feedback = error.localizedDescription; message = "Start mislukt"; openManager() }
+        process.terminationHandler = { process in Task { @MainActor in self.child = nil; self.snapshot = nil; self.hydratedKeys = false; self.message = process.terminationStatus == 0 ? "Stopped" : "Start failed (\(process.terminationStatus))"; self.rebuildMenu() } }
+        do { try process.run(); child = process; message = "Starting…"; hydratedKeys = false; rebuildMenu() }
+        catch { feedback = error.localizedDescription; message = "Start failed"; openManager() }
     }
-    @objc func stop() { child?.terminate(); message = "Stoppen…"; rebuildMenu() }
+    @objc func stop() { child?.terminate(); message = "Stopping…"; rebuildMenu() }
     @objc func cancel() { request("/bridge/cancel", method: "POST") { _ in self.poll() } }
     func choose(_ id: String) {
         request("/bridge/model", method: "POST", body: jsonData(["model": id])) { result in
@@ -198,10 +198,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
     func saveProvider(_ provider: ProviderRecord, secret: String, completion: @escaping (Bool) -> Void = { _ in }) {
-        guard var config = snapshot?.config else { feedback = "Start eerst de bridge."; return }
+        guard var config = snapshot?.config else { feedback = "Start the bridge first."; return }
         if let index = config.providers.firstIndex(where: { $0.id == provider.id }) { config.providers[index] = provider } else { config.providers.append(provider) }
         if !config.providers.contains(where: { $0.enabled && $0.models.contains(where: { $0.enabled && $0.id == config.selectedModel }) }) {
-            guard let replacement = config.providers.filter(\.enabled).flatMap(\.models).first(where: \.enabled) else { feedback = "Houd minstens één model ingeschakeld."; return }
+            guard let replacement = config.providers.filter(\.enabled).flatMap(\.models).first(where: \.enabled) else { feedback = "Keep at least one model enabled."; return }
             config.selectedModel = replacement.id
         }
         saving = true
@@ -213,9 +213,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             case .success:
                 if !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     if self.storeProviderKey(provider.id, secret) { self.uploadKey(provider.id, secret) }
-                    else { self.feedback = "Provider bewaard; sleutel opslaan in Sleutelhanger mislukt."; self.poll(); completion(false); return }
+                    else { self.feedback = "Provider saved; could not save key to Keychain."; self.poll(); completion(false); return }
                 }
-                self.feedback = "Instellingen bewaard. Nieuwe aanvragen gebruiken deze configuratie."
+                self.feedback = "Settings saved. New requests use this configuration."
                 self.poll(); completion(true)
             case .failure(let error): self.feedback = error.localizedDescription; completion(false)
             }
@@ -235,7 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     let id = providerID + "/" + upstream
                     if !provider.models.contains(where: { $0.id == id }) { provider.models.append(ModelRecord(id: id, upstreamModel: upstream, name: row["name"] ?? upstream, enabled: false)); count += 1 }
                 }
-                if count > 0 { self.saveProvider(provider, secret: "") } else { self.feedback = "Geen nieuwe modellen gevonden." }
+                if count > 0 { self.saveProvider(provider, secret: "") } else { self.feedback = "No new models found." }
             } catch { self.feedback = error.localizedDescription }
         }
     }
@@ -243,7 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         guard testingModel == nil else { return }; testingModel = model
         request("/v1/chat/completions", method: "POST", body: jsonData(["model": model, "messages": [["role": "user", "content": "Reply with exactly: bridge works"]]]), timeout: 125) { result in
             self.testingModel = nil
-            switch result { case .success: self.feedback = "Testaanvraag geslaagd voor \(model)."; case .failure(let error): self.feedback = "Test mislukt: \(error.localizedDescription)" }
+            switch result { case .success: self.feedback = "Test request succeeded for \(model)."; case .failure(let error): self.feedback = "Test failed: \(error.localizedDescription)" }
             self.poll()
         }
     }
@@ -269,7 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
     func pickExecutable() -> String? {
-        let panel = NSOpenPanel(); panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false; panel.showsHiddenFiles = true
+        let panel = NSOpenPanel(); panel.title = "Choose CLI executable"; panel.prompt = "Choose"; panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false; panel.showsHiddenFiles = true
         return panel.runModal() == .OK ? panel.url?.path : nil
     }
     func installInstructions(_ type: String) {
@@ -277,7 +277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         if let value = links[type], let url = URL(string: value) { NSWorkspace.shared.open(url) }
     }
     func login(_ provider: ProviderRecord) {
-        guard FileManager.default.isExecutableFile(atPath: provider.cliPath) else { feedback = "Installeer eerst de CLI of kies een uitvoerbaar bestand."; return }
+        guard FileManager.default.isExecutableFile(atPath: provider.cliPath) else { feedback = "Install the CLI first or choose an executable file."; return }
         let quote: (String) -> String = { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
         let suffix = provider.type == "claude" ? " auth login" : provider.type == "codex" ? " login" : ""
         let script = "#!/bin/zsh\ncd \(quote(state.path))\nexec \(quote(provider.cliPath))\(suffix)\n"
@@ -289,10 +289,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         } catch { feedback = error.localizedDescription }
     }
     func copy(_ value: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value, forType: .string) }
-    @objc func copyModel() { if let id = snapshot?.selectedModelID { copy(id); feedback = "Model-ID gekopieerd: \(id)" } }
+    @objc func copyModel() { if let id = snapshot?.selectedModelID { copy(id); feedback = "Model ID copied: \(id)" } }
     func copyURL() { copy(endpoint + "/v1") }
     func copyKey() { if let key = bridgeKey { copy(key) } }
-    @objc func copyConfig() { if let key = bridgeKey, let id = snapshot?.selectedModelID { copy("API-type: OpenAI Chat Completions\nBase URL: \(endpoint)/v1\nAPI key: \(key)\nModel: \(id)\n") } }
+    @objc func copyConfig() { if let key = bridgeKey, let id = snapshot?.selectedModelID { copy("API type: OpenAI Chat Completions\nBase URL: \(endpoint)/v1\nAPI key: \(key)\nModel: \(id)\n") } }
     @objc func quit() { NSApp.terminate(nil) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let process = child, process.isRunning else { return .terminateNow }

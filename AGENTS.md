@@ -51,3 +51,16 @@ Run `npm test`. Integration tests use fixtures; live smoke requests consume
 subscription quota and must be reported separately. No guessed token/quota
 counters. Verify the visible effect of GUI changes, including clipboard actions.
 Never commit keys, provider credentials, prompts, response logs or build output.
+
+## Protocol and UI
+
+API-provider requests use native Chat Completions forwarding: preserve tools,
+message arrays, tool results, finish reasons and upstream usage in JSON and SSE.
+Clients execute API functions; never execute them in the bridge. CLI adapters
+normalize text arrays and explicitly reject unsupported controls/functions with
+422. Do not silently discard options or imply CLI parity with API providers.
+
+All shipped UI/diagnostic text is English. Preserve user-provided names. Keep
+main text at 14pt and secondary text at least 13pt. Bound notifications to the
+detail column and put full technical errors in selectable, copyable details;
+never allow an unbroken error or model ID to determine window width.

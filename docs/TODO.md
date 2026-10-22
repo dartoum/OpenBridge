@@ -12,5 +12,6 @@
   architecture-specific and not notarized.
 - Native model catalogue discovery for Claude/Codex if they expose stable APIs;
   current GUI supports explicit manual model IDs.
-- Broader API capabilities (tools, images, JSON mode) remain out of scope until
-  adapters can preserve their semantics; unsupported fields fail explicitly.
+- Live GOAT/OpenCode function-calling acceptance after a key is configured.
+  Local native API protocol fixtures pass; CLI adapters remain text-only.
+- Images and Responses API remain unsupported.

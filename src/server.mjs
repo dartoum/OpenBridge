@@ -11,15 +11,16 @@ import { pathToFileURL } from 'node:url';
 
 export function validate(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw Error('Expected a JSON object');
-  const allowed = new Set(['model', 'messages', 'stream']);
-  for (const key of Object.keys(body)) if (!allowed.has(key)) throw Error(`Unsupported parameter: ${key}`);
   if (typeof body.model !== 'string' || body.model.length>220) throw Error('Unsupported bridge model');
   if (body.stream !== undefined && typeof body.stream !== 'boolean') throw Error('stream must be boolean');
-  if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 200) throw Error('messages must contain 1–200 text messages');
+  if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 200) throw Error('messages must contain 1–200 messages');
   for (const m of body.messages) {
-    if (!m || !['system', 'user', 'assistant'].includes(m.role) || typeof m.content !== 'string' || Object.keys(m).some(k => !['role', 'content'].includes(k))) throw Error('Only system/user/assistant messages with string content are supported');
+    if (!m || !['system', 'developer', 'user', 'assistant', 'tool'].includes(m.role)) throw Error('Invalid message role');
+    if (typeof m.content !== 'string' && !(m.role === 'assistant' && m.content == null && Array.isArray(m.tool_calls)) && !(Array.isArray(m.content) && m.content.every(p => p?.type === 'text' && typeof p.text === 'string'))) throw Error('Message content must be text or an array of text parts');
+    if (m.role === 'tool' && typeof m.tool_call_id !== 'string') throw Error('Tool results require tool_call_id');
   }
-  if (body.messages.at(-1).role !== 'user') throw Error('Last message must be user');
+  for (const name of ['max_tokens', 'max_completion_tokens']) if (body[name] !== undefined && (!Number.isInteger(body[name]) || body[name] < 1)) throw Error(`${name} must be a positive integer`);
+  if (body.tools !== undefined && !Array.isArray(body.tools)) throw Error('tools must be an array');
   return body;
 }
 
@@ -136,15 +137,54 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
       const provider=structuredClone(config.providers.find(p=>p.id===selected.providerID));
       const spec=structuredClone(selected);
       const settings={provider,modelSpec:spec,apiKey:secrets[provider.id],commandCodeKey:secrets.commandcode,commandCodeModel:spec.upstreamModel};
+      if (provider.type !== 'openai') {
+        const unsupported = Object.keys(body).filter(k => !['model','messages','stream','tools','tool_choice'].includes(k));
+        if (unsupported.length || body.tools?.length || (body.tool_choice && body.tool_choice !== 'none') || body.messages.some(m => m.role === 'tool' || m.tool_calls)) return error(422, `${provider.name} CLI supports text chat only. Unsupported options: ${unsupported.join(', ') || 'function calling'}. Use an OpenAI-compatible API provider for these features.`);
+        body.messages = body.messages.map(m => ({role:m.role === 'developer' ? 'system' : m.role, content:Array.isArray(m.content) ? m.content.map(p=>p.text).join('') : m.content}));
+      }
       active=true;activeModel=spec.id;stats.requests++;
       const started=Date.now(),controller=new AbortController();currentController=controller;
       const timer=setTimeout(()=>controller.abort(),timeout);
       res.on('close',()=>controller.abort());
       const id=`chatcmpl-${randomUUID()}`,created=Math.floor(Date.now()/1000);
       let streaming=false,text='';
-      const event=value=>{if(!res.destroyed)res.write(`data: ${JSON.stringify(value)}\n\n`);};
+      const event=value=>{if(res.writableLength>4*1024*1024){controller.abort();return;}if(!res.destroyed)res.write(`data: ${JSON.stringify(value)}\n\n`);};
       const chunk=(delta,finish_reason=null)=>event({id,object:'chat.completion.chunk',created,model:spec.id,choices:[{index:0,delta,finish_reason}]});
       try{
+        if (provider.type === 'openai' && runner === runProvider) {
+          const headers = {'Content-Type':'application/json'};
+          if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
+          if (provider.id === 'commandcode' && !settings.apiKey) throw Error('Command Code API key is not configured');
+          const upstream = await fetch(provider.baseURL.replace(/\/$/, '') + '/chat/completions', {method:'POST', headers, signal:controller.signal, redirect:'error', body:JSON.stringify({...body, model:spec.upstreamModel})});
+          if (!upstream.ok) throw Error(`Provider returned HTTP ${upstream.status}: ${(await upstream.text()).slice(0, 1500)}`);
+          if (body.stream) {
+            streaming=true;
+            res.writeHead(200, {'Content-Type':'text/event-stream', 'Cache-Control':'no-cache'});
+            let buffer='', done=false;
+            const decoder=new TextDecoder();
+            const forward=line=>{
+              if (!line.startsWith('data:')) return;
+              const data=line.slice(5).trim();
+              if (data === '[DONE]') { done=true; res.write('data: [DONE]\n\n'); return; }
+              if (!data) return;
+              const value=JSON.parse(data);
+              if (value.error) throw Error(value.error.message || 'Provider stream failed');
+              value.model=spec.id;event(value);
+            };
+            for await (const bytes of upstream.body) {
+              buffer+=decoder.decode(bytes,{stream:true});
+              if(buffer.length>4*1024*1024) throw Error('Provider event too large');
+              let end;while((end=buffer.indexOf('\n'))>=0){forward(buffer.slice(0,end).replace(/\r$/, ''));buffer=buffer.slice(end+1);}
+            }
+            buffer+=decoder.decode();if(buffer.trim()) forward(buffer.trim());
+            if(!done) throw Error('Provider stream ended before [DONE]');
+            res.end();
+          } else {
+            const value=await upstream.json();value.model=spec.id;json(200,value);
+          }
+          stats.succeeded++;checks[spec.id]={success:true,at:new Date().toISOString(),durationMs:Date.now()-started};
+          return;
+        }
         const result=await runner(body.messages,controller.signal,delta=>{
           text+=delta;if(text.length>2*1024*1024){controller.abort();return;}
           if(body.stream&&!res.destroyed){if(!streaming){res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache'});streaming=true;chunk({role:'assistant'});}chunk({content:delta});}

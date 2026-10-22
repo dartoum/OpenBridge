@@ -25,8 +25,8 @@ test('authenticated API, validation, streaming and upstream errors', async t => 
   assert.equal(status.succeeded, 2);
   assert.equal(status.requests, 2);
   assert.equal(status.active, false);
-  assert.equal((await post({ ...body, tools: [] })).status, 400);
-  assert.equal((await post({ ...body, messages: [{ role: 'user', content: [] }] })).status, 400);
+  assert.equal((await post({ ...body, tools: [] })).status, 200);
+  assert.equal((await post({ ...body, messages: [{ role: 'user', content: [{type:'text',text:'hello'}] }] })).status, 200);
   assert.equal((await post({ ...body, messages: [{ role: 'user', content: 'fail' }] })).status, 502);
 });
 

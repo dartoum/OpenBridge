@@ -28,7 +28,7 @@ For a CLI provider, choose its executable path, open official install instructio
 start interactive login, and refresh installation/account checks. These checks
 are separate from the **Test** button, which makes a real quota-consuming request.
 
-**Provider toevoegen** adds an OpenAI-compatible endpoint with an optional key
+**Add provider** adds an OpenAI-compatible endpoint with an optional key
 and an initial model ID. API keys go in macOS Keychain, not the configuration
 file. For Command Code, enter its key and select a model included in your plan.
 No Command Code CLI is required. GOAT usage is metered against plan credits;
@@ -36,7 +36,7 @@ provider rules may also consume purchased top-ups. OpenBridge buys nothing and
 cannot enforce a provider-side plan-only spending lock.
 
 Models can be added manually. API and Antigravity model discovery are supported;
-newly discovered models are initially off. Changes require **Bewaar wijzigingen**.
+newly discovered models are initially off. Changes require **Save changes**.
 Disabled models disappear from the API model list and are refused by direct ID.
 A configuration change does not alter an already-running request.
 
@@ -50,11 +50,11 @@ connection details.
 |---|---|
 | API type | OpenAI-compatible / Chat Completions |
 | Base URL | `http://127.0.0.1:8000/v1` |
-| API key | **Kopieer API-sleutel** / **Kopieer alle verbindingsgegevens** |
+| API key | **Copy** / **Copy connection settings** |
 | Model | Concrete model ID copied from the GUI, e.g. `claude/sonnet` |
 
 Full endpoint if requested: `http://127.0.0.1:8000/v1/chat/completions`.
-**Kopieer model-ID** now copies the actual selection, not the generic alias.
+**Copy model ID** now copies the actual selection, not the generic alias.
 A project's concrete ID stays on that model when the GUI selection changes.
 The optional `subscription` alias follows the selection for future calls.
 
@@ -89,11 +89,23 @@ not yet working; the GUI test shows the failure rather than claiming readiness.
 Initial streaming attempts also failed with `trajectory not found`; single-prompt
 mode avoids that protocol path. No global provider permissions were changed.
 
-The API is text-only: `model`, `messages`, `stream`, with string
-system/user/assistant messages. Unknown fields, tool calls, images, JSON mode,
-embeddings and Responses API are unsupported. Browser origins are blocked; call
-from a backend on this Mac. One request at a time (429 while busy), 120-second
-timeout and cancellation. No invented token counts or remaining-quota estimates.
+API providers (Command Code GOAT and custom OpenAI-compatible endpoints) forward
+Chat Completions options, including `max_tokens`, `max_completion_tokens`, `tools`,
+`tool_choice` and `stream_options`. Text content arrays and tool-result messages
+are accepted. JSON responses and SSE preserve tool calls, argument fragments,
+finish reasons and actual upstream usage. Your client executes functions;
+OpenBridge never executes API tool calls. Upstream model support still applies.
+
+CLI providers accept plain text and arrays of text parts. They do not support
+function calling or generation controls in this adapter: these return HTTP 422
+with the provider and unsupported options, rather than silently ignoring them.
+Images, embeddings and Responses API are not implemented. Browser origins are
+blocked; call from a backend on this Mac. One request at a time (429 while busy),
+120-second timeout and cancellation. No invented token counts or quota estimates.
+
+The app uses English labels and diagnostics, 14-point main text and 13-point
+secondary text. Notifications stay within the detail column. Long errors have
+a scrollable, selectable **Details** sheet and **Copy details** action.
 
 ## State and verification
 
@@ -115,7 +127,7 @@ BRIDGE_KEY_FILE="$HOME/Library/Application Support/OpenBridge/.bridge-key" \
   BRIDGE_MODEL=claude/sonnet node scripts/smoke.mjs --stream
 ```
 
-Fifteen fixture-backed tests cover routing, config persistence, disabled models,
+Sixteen fixture-backed tests cover routing, config persistence, disabled models,
 authentication, admin separation, SSE, cancellation and errors. GUI acceptance
 verified the window, real copy/paste of `claude/sonnet`, live Claude testing, and
 adding/testing/disabling a temporary local API provider. The disabled model was
@@ -128,3 +140,7 @@ Sources: [Google transition](https://developers.googleblog.com/an-important-upda
 [Antigravity headless](https://antigravity.google/docs/cli/headless),
 [Codex automation](https://learn.chatgpt.com/docs/non-interactive-mode),
 [Command Code API](https://commandcode.ai/docs/provider).
+
+The protocol fixture additionally verifies text arrays, token limits, a complete
+function-call/result cycle, fragmented SSE tool arguments, usage frames and a
+truncated stream. This is local protocol evidence, not a live GOAT/OpenCode run.
