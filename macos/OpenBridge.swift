@@ -180,7 +180,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         add("Stop bridge", #selector(stop), child != nil && !maintenanceRunning)
         add("Cancel request", #selector(cancel), snapshot?.active == true)
         menu.addItem(.separator())
-        add("Copy model ID", #selector(copyModel), snapshot != nil)
         add("Copy connection settings", #selector(copyConfig), snapshot != nil)
         if includeQuit { menu.addItem(.separator()); add("Quit OpenBridge", #selector(quit)) }
         return menu
@@ -302,12 +301,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
     @objc func stop() { child?.terminate(); message = "Stopping…"; rebuildMenu() }
     @objc func cancel() { request("/bridge/cancel", method: "POST") { _ in self.poll() } }
-    func choose(_ id: String) {
-        request("/bridge/model", method: "POST", body: jsonData(["model": id])) { result in
-            if case .failure(let error) = result { self.issue = Issue(title: "Could not select the model", message: error.localizedDescription) }
-            self.poll()
-        }
-    }
     var lastCheck = Date.distantPast
     func refreshChecksIfStale() { if Date().timeIntervalSince(lastCheck) > 15 { refreshChecks() } }
     func refreshChecks() {
@@ -550,10 +543,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         } catch { issue = Issue(title: "Could not open sign-in", message: error.localizedDescription) }
     }
     func copy(_ value: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value, forType: .string) }
-    @objc func copyModel() { if let id = snapshot?.selectedModelID { copy(id) } }
     func copyURL() { copy(endpoint + "/v1") }
     func copyKey() { if let key = bridgeKey { copy(key) } }
-    @objc func copyConfig() { if let key = bridgeKey, let id = snapshot?.selectedModelID { copy("API type: OpenAI Chat Completions\nBase URL: \(endpoint)/v1\nAPI key: \(key)\nModel: \(id)\n") } }
+    @objc func copyConfig() { if let key = bridgeKey { copy("API type: OpenAI Chat Completions\nBase URL: \(endpoint)/v1\nAPI key: \(key)\n") } }
     @objc func quit() { NSApp.terminate(nil) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if maintenanceRunning { issue = Issue(title: "CLI update in progress", message: "Wait for the update to finish before quitting."); openManager(); return .terminateCancel }

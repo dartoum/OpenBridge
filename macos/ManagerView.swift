@@ -176,6 +176,9 @@ struct Overview: View {
                     Button(app.child == nil && app.snapshot == nil ? "Start bridge" : "Stop bridge") { app.child == nil && app.snapshot == nil ? app.start() : app.stop() }
                         .disabled(app.maintenanceRunning || (app.child == nil && app.snapshot != nil))
                 }
+                if let snapshot = app.snapshot, snapshot.active {
+                    HStack { ProgressView().controlSize(.small); Text("Running \(snapshot.activeModel ?? "request")"); Spacer(); Button("Cancel") { app.cancel() } }
+                }
                 if app.snapshot != nil && app.child == nil { Text("This bridge runs outside the app. Stop it in its terminal.").font(secondaryFont).foregroundStyle(.secondary) }
             }
             if app.snapshot?.maintenance == true && !app.maintenanceRunning {
@@ -185,27 +188,23 @@ struct Overview: View {
                 }
             }
             if let snapshot = app.snapshot {
-                Section("Model for new requests") {
-                    Picker("Model", selection: Binding(get: { snapshot.selectedModelID }, set: { app.choose($0) })) {
-                        ForEach(snapshot.config.providers.filter(\.enabled)) { provider in
-                            Section(provider.name) {
-                                ForEach(snapshot.models.filter { $0.providerID == provider.id && $0.enabled }, id: \.id) { entry in
-                                    Text(app.pickerLabel(entry, provider)).tag(entry.id)
+                Section("Models available to apps") {
+                    Text("One endpoint for every model that is switched on. An app picks a model by its ID. Thinking applies to every request for a model; an app can override it with reasoning_effort.").font(secondaryFont).foregroundStyle(.secondary)
+                    if snapshot.models.contains(where: \.enabled) == false {
+                        Text("Switch on models on a provider page; they appear here.").foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(snapshot.config.providers.filter(\.enabled)) { provider in
+                    let entries = snapshot.models.filter { $0.providerID == provider.id && $0.enabled }
+                    if !entries.isEmpty {
+                        Section(provider.name) {
+                            ForEach(entries, id: \.id) { entry in
+                                if let model = provider.models.first(where: { $0.id == entry.id }) {
+                                    AvailableModelRow(app: app, provider: provider, model: model, label: app.pickerLabel(entry, provider))
                                 }
                             }
                         }
                     }
-                    if let model = app.model(snapshot.selectedModelID), let efforts = model.efforts, !efforts.isEmpty {
-                        EffortPicker(model: model) { app.setEffort(model.id, $0) }
-                    }
-                    LabeledContent("Model ID") {
-                        Text(snapshot.selectedModelID).font(.system(.body, design: .monospaced)).textSelection(.enabled)
-                        CopyButton(title: "Copy") { app.copyModel() }
-                    }
-                    if snapshot.active {
-                        HStack { ProgressView().controlSize(.small); Text("Running \(snapshot.activeModel ?? "request")"); Spacer(); Button("Cancel") { app.cancel() } }
-                    }
-                    Text("Apps that use ‘subscription’ follow this choice. Thinking applies to every request for this model; an app can override it with reasoning_effort.").font(secondaryFont).foregroundStyle(.secondary)
                 }
             }
             Section("Connect from another app") {
@@ -481,16 +480,36 @@ struct ModelRow: View {
     }
 }
 
+struct AvailableModelRow: View {
+    @ObservedObject var app: AppDelegate
+    let provider: ProviderRecord
+    let model: ModelRecord
+    let label: String
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(label).lineLimit(2).frame(width: 190, alignment: .leading)
+            Text(model.id).font(identifierFont).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                .textSelection(.enabled).help(model.id).frame(maxWidth: .infinity, alignment: .leading)
+            if let efforts = model.efforts, !efforts.isEmpty {
+                EffortPicker(model: model, labeled: false) { app.setEffort(model.id, $0) }.frame(width: 150)
+            } else { Color.clear.frame(width: 150, height: 1) }
+            CopyIconButton(value: model.id) { app.copy(model.id) }
+        }.padding(.vertical, 2)
+    }
+}
+
 struct EffortPicker: View {
     let model: ModelRecord
+    var labeled = true
     let change: (String?) -> Void
     var body: some View {
-        Picker("Thinking", selection: Binding(get: { model.effort ?? "" }, set: { change($0.isEmpty ? nil : $0) })) {
+        let picker = Picker("Thinking", selection: Binding(get: { model.effort ?? "" }, set: { change($0.isEmpty ? nil : $0) })) {
             Text(model.defaultEffort.map { "Default (\(effortLabel($0)))" } ?? "Default").tag("")
             Divider()
             ForEach(model.efforts ?? [], id: \.self) { Text(effortLabel($0)).tag($0) }
         }
         .help("Thinking level for every request to \(model.id)")
+        if labeled { picker } else { picker.labelsHidden() }
     }
 }
 

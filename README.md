@@ -23,7 +23,7 @@ The window opens on launch. **Start bridge** opens `127.0.0.1:8000`. OpenBridge
 is a normal Dock app with the standard menus, so the window can always be found
 again from the Dock, Cmd-Tab or the Window menu. The menu bar icon (dimmed while
 stopped, with a dot during a request) and the Dock menu offer start/stop,
-cancellation and copy actions. Closing the window leaves the bridge running;
+cancellation and copying the connection settings. Closing the window leaves the bridge running;
 quitting stops its own server. Externally started servers are not killed.
 
 ## Provider management
@@ -61,8 +61,8 @@ for apps that already use them and live under **Advanced** (shown as
 newly discovered models are initially off, and fetching removes only disabled
 catalogue entries that a previous fetch added and the catalogue no longer lists.
 
-**Thinking** is chosen on the Bridge page, next to the model for new requests, so
-it is quick to switch; it is remembered per model. Claude and Codex report their own supported levels (for example low
+**Thinking** is chosen on the Bridge page, in the list of models available to apps,
+so it is quick to switch; it is remembered per model. Claude and Codex report their own supported levels (for example low
 to max); Claude receives `--effort`, Codex `model_reasoning_effort`. A client can
 override it per request with `reasoning_effort`; an unsupported level returns
 HTTP 422. Antigravity has no separate setting: its level is part of the model ID
@@ -84,14 +84,16 @@ connection details.
 | API type | OpenAI-compatible / Chat Completions |
 | Base URL | `http://127.0.0.1:8000/v1` |
 | API key | **Copy** / **Copy connection settings** |
-| Model | Concrete model ID copied from the GUI, e.g. `claude/sonnet` |
+| Model | Any model ID from the list on the Bridge page (or `GET /v1/models`), e.g. `claude/claude-sonnet-5-5` |
 
 Full endpoint if requested: `http://127.0.0.1:8000/v1/chat/completions`.
-**Copy model ID** now copies the actual selection, not the generic alias.
-A provider-prefixed ID stays on that configured upstream ID when GUI selection
-changes. Family aliases such as `claude/haiku` follow the CLI's version mapping;
-use a version ID such as `claude/claude-haiku-5-5` to pin a version.
-The optional `subscription` alias follows the selection for future calls.
+One endpoint serves every model that is switched on, across all providers; the
+Bridge page lists them with a copy button per ID. A provider-prefixed ID always
+addresses that configured upstream ID. Family aliases such as `claude/haiku`
+follow the CLI's version mapping; use a version ID such as
+`claude/claude-haiku-5-5` to pin a version. The legacy `subscription` alias keeps
+using the model that was last selected before the app dropped that choice; new
+apps should name a model.
 
 Default examples:
 
