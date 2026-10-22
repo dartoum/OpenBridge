@@ -68,7 +68,7 @@ scripts/build-menubar.sh
 open build/OpenBridge.app
 ```
 
-Click **OB** in the menu bar. Start/stop the bridge, cancel the active request,
+Click the bridge icon in the menu bar. Start/stop the bridge, cancel the active request,
 choose Sonnet/Opus/Haiku while stopped, and copy the endpoint, key or model ID.
 The model choice persists; requests to `claude-subscription` use that choice.
 These aliases resolve through the installed Claude CLI and depend on your plan.

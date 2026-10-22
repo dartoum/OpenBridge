@@ -21,10 +21,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         node = Bundle.main.object(forInfoDictionaryKey: "NodePath") as? String ?? "/usr/local/bin/node"
         super.init()
     }
+    // Small template glyph: two bridge piers, a deck and a single arch.
+    func bridgeIcon() -> NSImage {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+            NSColor.black.setStroke()
+            let path = NSBezierPath()
+            path.lineWidth = 1.6
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            path.move(to: NSPoint(x: 1.5, y: 7.5))
+            path.line(to: NSPoint(x: 16.5, y: 7.5))
+            for x in [CGFloat(4), CGFloat(14)] {
+                path.move(to: NSPoint(x: x, y: 3.5))
+                path.line(to: NSPoint(x: x, y: 13.5))
+            }
+            path.move(to: NSPoint(x: 4, y: 8))
+            path.curve(to: NSPoint(x: 14, y: 8), controlPoint1: NSPoint(x: 6, y: 15), controlPoint2: NSPoint(x: 12, y: 15))
+            path.stroke()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "OpenBridge"
+        return image
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "point.3.connected.trianglepath.dotted", accessibilityDescription: "OpenBridge")
-        item.button?.title = " OB"
+        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = bridgeIcon()
+        item.button?.imagePosition = .imageOnly
+        item.button?.title = ""
         item.menu = menu
         menu.delegate = self
         rebuild()
@@ -47,7 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.autoenablesItems = false
         let running = status != nil
         let busy = status?["active"] as? Bool ?? false
-        item.button?.title = busy ? " OB ◉" : (running ? " OB ●" : " OB ○")
+        item.button?.title = ""
         item.button?.toolTip = "OpenBridge — \(message)"
         _ = add("OpenBridge · \(message)")
         _ = add("Claude · \(status?["model"] as? String ?? selectedModel)")
