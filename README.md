@@ -16,29 +16,53 @@ scripts/build-menubar.sh
 open build/OpenBridge.app
 ```
 
-The window opens on launch. **Start bridge** opens `127.0.0.1:8000`. The bridge
-icon keeps a compact menu for start/stop, cancellation and reopening management.
-Closing the window leaves the bridge running; quitting stops its own server.
-Externally started servers are not killed.
+The window opens on launch. **Start bridge** opens `127.0.0.1:8000`. OpenBridge
+is a normal Dock app with the standard menus, so the window can always be found
+again from the Dock, Cmd-Tab or the Window menu. The menu bar icon (dimmed while
+stopped, with a dot during a request) and the Dock menu offer start/stop,
+cancellation and copy actions. Closing the window leaves the bridge running;
+quitting stops its own server. Externally started servers are not killed.
 
 ## Provider management
 
 The sidebar contains Claude Pro, ChatGPT, Google AI Pro and Command Code GOAT.
-For a CLI provider, choose its executable path, open official install instructions,
-start interactive login, and refresh installation/account checks. These checks
-are separate from the **Test** button, which makes a real quota-consuming request.
+A CLI provider page shows the installed version and login state, and offers
+**Sign in…** and **Update CLI…**. OpenBridge finds a CLI in the usual places
+(`~/.local/bin`, Homebrew) by itself and re-checks when you open the page, when
+the app returns to the front and after an update, so there is no refresh button.
+A different program can be chosen under **Advanced**, or via **Choose program…**
+when none is found. **Sign in…** only appears when the CLI reports that nobody is
+signed in. There is no test button: each model shows the outcome of the last
+real request an app made, and nothing is sent to your account on its own.
 
-**Add provider** adds an OpenAI-compatible endpoint with an optional key
-and an initial model ID. API keys go in macOS Keychain, not the configuration
-file. For Command Code, enter its key and select a model included in your plan.
+**Add provider** asks for a name, the address of an OpenAI-compatible endpoint
+and an API key (empty for a server on this Mac, such as LM Studio or Ollama).
+OpenBridge then loads that endpoint's model list and opens its page; the models
+start off. API keys go in macOS Keychain, not the configuration file. For Command Code, enter its key and select a model included in your plan.
 No Command Code CLI is required. GOAT usage is metered against plan credits;
 provider rules may also consume purchased top-ups. OpenBridge buys nothing and
 cannot enforce a provider-side plan-only spending lock.
 
-Models can be added manually or searched after **Fetch models**. Claude, Codex,
-API and Antigravity model discovery are supported;
-newly discovered models are initially off. Changes require **Save changes**.
-Disabled models disappear from the API model list and are refused by direct ID.
+Models are grouped per family (for example Opus, Sonnet, Haiku), newest version
+first. The newest version is always visible; older versions sit behind a row that
+opens by itself when one of them is enabled. Family shortcuts such as
+`claude/haiku` follow whatever version the CLI picks automatically; they are kept
+for apps that already use them and live under **Advanced** (shown as
+“Automatic” in the model picker). API providers can add a model ID by hand under
+**Advanced**. Claude, Codex, API and Antigravity discovery are supported;
+newly discovered models are initially off, and fetching removes only disabled
+catalogue entries that a previous fetch added and the catalogue no longer lists.
+
+**Thinking** is chosen on the Bridge page, next to the model for new requests, so
+it is quick to switch; it is remembered per model. Claude and Codex report their own supported levels (for example low
+to max); Claude receives `--effort`, Codex `model_reasoning_effort`. A client can
+override it per request with `reasoning_effort`; an unsupported level returns
+HTTP 422. Antigravity has no separate setting: its level is part of the model ID
+(`…-medium`). API providers receive `reasoning_effort` unchanged.
+
+Provider pages have no Save button: switches and model changes apply at once, and text fields (name, path, URL, key) apply on Return or when
+the field loses focus. Invalid values stay in place with the reason under the
+field. Disabled models disappear from the API model list and are refused by direct ID.
 A configuration change does not alter an already-running request.
 
 The normal API key cannot access configuration, credentials or management routes.
@@ -103,15 +127,24 @@ CLI providers accept plain text and arrays of text parts. Claude also accepts
 `response_format` with `text`, `json_object` or `json_schema`. JSON Schema uses
 the CLI’s `--json-schema` and `structured_output`; JSON-object mode checks the
 complete reply before delivery. Structured replies are buffered, including SSE.
-CLI providers do not support function calling or token limits in this adapter: these return HTTP 422
-with the provider and unsupported options, rather than silently ignoring them.
+CLI providers do not support function calling in this adapter, nor `n` or other
+options that would change the result: these return HTTP 422 with the provider and
+the unsupported options. Length and sampling options (`max_tokens`,
+`max_completion_tokens`, `temperature`, `top_p`, penalties, `stop`, `seed`, `user`,
+`stream_options`) cannot be applied by a CLI: they are ignored, and the response
+carries `X-OpenBridge-Ignored` naming them, so a client can notice. The token
+limit therefore does not apply on CLI routes.
 Images, embeddings and Responses API are not implemented. Browser origins are
 blocked; call from a backend on this Mac. One request at a time (429 while busy),
 120-second timeout and cancellation. No invented token counts or quota estimates.
 
 The app uses English labels and diagnostics, 14-point main text and 13-point
-secondary text. Notifications stay within the detail column. Long errors have
-a scrollable, selectable **Details** sheet and **Copy details** action.
+secondary text. Results appear next to the control that caused them (a model's
+test result, the fetch summary, the field error). Only errors that need attention
+use a system alert, with **Show Details** for the full text in a scrollable,
+selectable sheet with **Copy details**. Copy buttons confirm in place. The menu
+bar icon is dimmed while the bridge is stopped and shows a dot during a request.
+A server that stops unexpectedly reports its own error output.
 
 ## State and verification
 
@@ -133,7 +166,7 @@ BRIDGE_KEY_FILE="$HOME/Library/Application Support/OpenBridge/.bridge-key" \
   BRIDGE_MODEL=claude/sonnet node scripts/smoke.mjs --stream
 ```
 
-Nineteen fixture-backed tests cover routing, config persistence, disabled models,
+Fixture-backed tests (`npm test`) cover routing, config persistence, disabled models,
 authentication, admin separation, SSE, cancellation and errors. GUI acceptance
 verified the window, real copy/paste of `claude/sonnet`, live Claude testing, and
 adding/testing/disabling a temporary local API provider. The disabled model was
@@ -168,26 +201,21 @@ On this Mac, Claude 2.1.286’s catalogue resolves `haiku` to
 Haiku 5.5. Successful CLI checks now show the served-model metadata. This is
 machine/account-specific evidence, not a claim about every subscription.
 
-## Pinned save actions and CLI updates
+## CLI updates
 
-Provider pages keep **Save changes** in a fixed bottom bar while the settings and
-model list scroll. The bar shows saved/unsaved state; failed saves retain an
-entered key so you can retry.
-
-**Tools** shows configured CLI paths, installation status and last checked version.
-**Update CLI…** previews the detected method and exact command before running:
-recognized native installs use `claude update`, `codex update` or `agy update`;
-recognized Homebrew casks use their own brew; npm updates target the matching
-existing prefix. Unknown/custom installations show instructions instead of
-being replaced. Missing tools are installed outside OpenBridge using official
-instructions, then selected on their provider page. There are no install actions.
+**Update CLI…** on a CLI provider's page previews the detected method and exact
+command before running: recognized native installs use `claude update`,
+`codex update` or `agy update`; recognized Homebrew casks use their own brew; npm
+updates target the matching existing prefix. Unknown/custom installations show
+a message instead of being replaced. Missing tools are installed outside
+OpenBridge; it then finds them by itself. There are no install actions.
 
 Updates run in the app, without sudo, retaining at most 64 KiB of combined output.
 A separate management lock refuses an update while a request is active and
 pauses new inference with HTTP 503. The app resumes requests afterward, including
-on update failures, and refreshes installation/version checks. **Resume bridge**
-on Tools recovers a pause left by interrupted maintenance. Model choices and
-account login configuration are retained. After an update use **Fetch models**;
+on update failures, and refreshes installation/version checks. **Resume requests**
+on the Bridge page recovers a pause left by interrupted maintenance. Model choices
+and account login configuration are retained. After an update use **Fetch models**;
 newer binaries can add support, but aliases and account entitlements can still
 lag. An update button does not claim a newer release is available.
 

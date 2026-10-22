@@ -20,7 +20,7 @@
 - Visual evidence: [Haiku 5.5](../build/ui-review/haiku-5-5.png) (ignored local
   build output; captured before changing the source label to public catalogue).
 
-19 local tests cover protocol forwarding, catalogue parsing, aliases vs explicit
+Local tests cover protocol forwarding, catalogue parsing, aliases vs explicit
 versions, JSON Schema/object output, suppression of unstructured stream deltas,
 malformed JSON, served-model metadata, configuration/auth and cancellation.
 The native app builds successfully. Public presence is not a general claim of

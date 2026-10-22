@@ -26,7 +26,7 @@ follow its advice to keep alert text concise:
 [Apple alerts](https://developer.apple.com/design/human-interface-guidelines/alerts).
 These support the direction; they do not prescribe this exact banner design.
 
-Protocol verification: 16 local tests pass, including real localhost HTTP
+Protocol verification: local tests pass, including real localhost HTTP
 forwarding of generation options, text arrays, a function-call/result cycle,
 fragmented streamed tool arguments, usage and finish reasons, and an incomplete
 SSE stream. The upstream fixture receives the original request with only the

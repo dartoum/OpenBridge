@@ -2,6 +2,27 @@ import AppKit
 import SwiftUI
 import Security
 
+// An error that needs the person's attention; contextual results stay next to the control that caused them.
+struct Issue: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+    var details: String?
+}
+struct InlineStatus {
+    let text: String
+    var failed = false
+    var details: String?
+}
+struct DiscoveredModel: Decodable {
+    var id: String
+    var name: String?
+    var source: String?
+    var resolvedModel: String?
+    var efforts: [String]?
+    var defaultEffort: String?
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     var item: NSStatusItem!
@@ -9,34 +30,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var child: Process?
     @Published var snapshot: BridgeSnapshot?
     @Published var message = "Stopped"
-    @Published var feedback: String?
+    @Published var issue: Issue?
     @Published var checking = false
     @Published var saving = false
-    @Published var discovering = false
-    @Published var testingModel: String?
+    @Published var discovering: String?
+    @Published var discoveryStatus: [String: InlineStatus] = [:]
+    @Published var requestedSelection: String?
     @Published var maintenanceRunning = false
     @Published var maintenanceOutput = ""
     @Published var maintenanceSucceeded = false
-    var configuredProviders: [ProviderRecord] {
-        snapshot?.config.providers ?? storedConfiguration?.providers ?? [
+    var storedProviders: [ProviderRecord]?
+    var providers: [ProviderRecord] {
+        snapshot?.config.providers ?? storedProviders ?? [
             ProviderRecord(id: "claude", name: "Claude Pro", type: "claude", enabled: true, cliPath: NSHomeDirectory() + "/.local/bin/claude", baseURL: "", models: []),
             ProviderRecord(id: "chatgpt", name: "ChatGPT", type: "codex", enabled: true, cliPath: NSHomeDirectory() + "/.local/bin/codex", baseURL: "", models: []),
             ProviderRecord(id: "google", name: "Google AI Pro", type: "antigravity", enabled: true, cliPath: NSHomeDirectory() + "/.local/bin/agy", baseURL: "", models: [])
         ]
     }
-    var storedConfiguration: BridgeConfiguration? {
-        guard let data = try? Data(contentsOf: state.appendingPathComponent("config.json")) else { return nil }
-        return try? JSONDecoder().decode(BridgeConfiguration.self, from: data)
-    }
     var timer: Timer?
     var polling = false
+    var pendingWrites = 0
     var hydratedKeys = false
+    var serverLog = ""
     let root: URL
     let state: URL
     let node: String
     let endpoint = "http://127.0.0.1:8000"
     var bridgeKey: String? { try? String(contentsOf: state.appendingPathComponent(".bridge-key"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) }
     var adminKey: String? { try? String(contentsOf: state.appendingPathComponent(".bridge-admin-key"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) }
+    lazy var idleIcon = bridgeIcon(busy: false)
+    lazy var busyIcon = bridgeIcon(busy: true)
     override init() {
         let bundle = Bundle.main
         let repo = URL(fileURLWithPath: bundle.object(forInfoDictionaryKey: "BridgeRoot") as? String ?? FileManager.default.currentDirectoryPath)
@@ -52,44 +75,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 try existing.write(to: target, options: .atomic)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
             }
-        } catch { feedback = "Could not open settings folder: \(error.localizedDescription)" }
+        } catch { issue = Issue(title: "Settings folder unavailable", message: error.localizedDescription) }
+        if let data = try? Data(contentsOf: state.appendingPathComponent("config.json")) {
+            storedProviders = (try? JSONDecoder().decode(BridgeConfiguration.self, from: data))?.providers
+        }
     }
-    // Small template glyph: two bridge piers, a deck and a single arch.
-    func bridgeIcon() -> NSImage {
-        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+    // Two bridge piers, a deck and a single arch; a dot marks an active request.
+    func bridgePath(busy: Bool) -> NSBezierPath {
+        let path = NSBezierPath()
+        path.lineWidth = 1.6
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+        path.move(to: NSPoint(x: 1.5, y: 7.5))
+        path.line(to: NSPoint(x: 16.5, y: 7.5))
+        for x in [CGFloat(4), CGFloat(14)] {
+            path.move(to: NSPoint(x: x, y: 3.5))
+            path.line(to: NSPoint(x: x, y: busy && x == 14 ? 10.5 : 13.5))
+        }
+        path.move(to: NSPoint(x: 4, y: 8))
+        path.curve(to: NSPoint(x: 14, y: 8), controlPoint1: NSPoint(x: 6, y: 15), controlPoint2: NSPoint(x: 12, y: 15))
+        return path
+    }
+    func bridgeIcon(busy: Bool) -> NSImage {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
             NSColor.black.setStroke()
-            let path = NSBezierPath()
-            path.lineWidth = 1.6
-            path.lineCapStyle = .round
-            path.lineJoinStyle = .round
-            path.move(to: NSPoint(x: 1.5, y: 7.5))
-            path.line(to: NSPoint(x: 16.5, y: 7.5))
-            for x in [CGFloat(4), CGFloat(14)] {
-                path.move(to: NSPoint(x: x, y: 3.5))
-                path.line(to: NSPoint(x: x, y: 13.5))
+            self.bridgePath(busy: busy).stroke()
+            if busy {
+                NSColor.black.setFill()
+                NSBezierPath(ovalIn: NSRect(x: 12.5, y: 12.5, width: 5, height: 5)).fill()
             }
-            path.move(to: NSPoint(x: 4, y: 8))
-            path.curve(to: NSPoint(x: 14, y: 8), controlPoint1: NSPoint(x: 6, y: 15), controlPoint2: NSPoint(x: 12, y: 15))
-            path.stroke()
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "OpenBridge"
         return image
     }
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    // Dock icon: the same glyph on a rounded square, following the macOS icon grid (824 pt body in a 1024 pt canvas).
+    func appIcon() -> NSImage {
+        NSImage(size: NSSize(width: 1024, height: 1024), flipped: false) { _ in
+            let body = NSBezierPath(roundedRect: NSRect(x: 100, y: 100, width: 824, height: 824), xRadius: 185, yRadius: 185)
+            NSGradient(starting: NSColor(calibratedRed: 0.20, green: 0.45, blue: 0.95, alpha: 1), ending: NSColor(calibratedRed: 0.08, green: 0.20, blue: 0.55, alpha: 1))?.draw(in: body, angle: -90)
+            let scale: CGFloat = 36
+            let glyph = self.bridgePath(busy: false)
+            var placement = AffineTransform(scale: scale)
+            placement.append(AffineTransform(translationByX: 512 - 9 * scale, byY: 512 - 9 * scale + 10))
+            glyph.transform(using: placement)
+            glyph.lineWidth = 1.6 * scale
+            NSColor.white.setStroke()
+            glyph.stroke()
+            return true
+        }
+    }
+    func buildMainMenu() {
         let mainMenu = NSMenu()
-        let applicationItem = NSMenuItem()
-        let applicationMenu = NSMenu()
+        let applicationItem = NSMenuItem(); let applicationMenu = NSMenu()
+        applicationMenu.addItem(withTitle: "About OpenBridge", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        applicationMenu.addItem(.separator())
+        applicationMenu.addItem(withTitle: "Hide OpenBridge", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = applicationMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        applicationMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        applicationMenu.addItem(.separator())
         applicationMenu.addItem(withTitle: "Quit OpenBridge", action: #selector(quit), keyEquivalent: "q").target = self
         applicationItem.submenu = applicationMenu; mainMenu.addItem(applicationItem)
         let editItem = NSMenuItem(); let editMenu = NSMenu(title: "Edit")
-        for (title, action, key) in [("Undo", "undo:", "z"), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select all", "selectAll:", "a")] {
+        for (title, action, key) in [("Undo", "undo:", "z"), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
             editMenu.addItem(withTitle: title, action: Selector(action), keyEquivalent: key)
         }
-        editItem.submenu = editMenu; mainMenu.addItem(editItem); NSApp.mainMenu = mainMenu
+        editItem.submenu = editMenu; mainMenu.addItem(editItem)
+        let windowItem = NSMenuItem(); let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(withTitle: "OpenBridge", action: #selector(openManager), keyEquivalent: "0").target = self
+        windowItem.submenu = windowMenu; mainMenu.addItem(windowItem)
+        NSApp.mainMenu = mainMenu; NSApp.windowsMenu = windowMenu
+    }
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.applicationIconImage = appIcon()
+        buildMainMenu()
+        // Sign-in and installs happen outside the app: look again whenever the app comes back to the front.
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.refreshChecksIfStale() }
+        }
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = bridgeIcon()
         item.button?.imagePosition = .imageOnly
         rebuildMenu()
         poll()
@@ -98,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in Task { @MainActor in self?.poll() } }
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { openManager(); return true }
-    func rebuildMenu() {
+    func controlMenu(includeQuit: Bool) -> NSMenu {
         let menu = NSMenu(); menu.autoenablesItems = false
         func add(_ title: String, _ action: Selector?, _ enabled: Bool = true) {
             let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
@@ -113,10 +182,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         menu.addItem(.separator())
         add("Copy model ID", #selector(copyModel), snapshot != nil)
         add("Copy connection settings", #selector(copyConfig), snapshot != nil)
-        menu.addItem(.separator())
-        add("Quit OpenBridge", #selector(quit))
-        item.menu = menu
-        item.button?.toolTip = "OpenBridge — \(message)"
+        if includeQuit { menu.addItem(.separator()); add("Quit OpenBridge", #selector(quit)) }
+        return menu
+    }
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? { controlMenu(includeQuit: false) }
+    func rebuildMenu() {
+        item.menu = controlMenu(includeQuit: true)
+        // Running: normal glyph. Busy: glyph with a dot. Stopped or starting: dimmed like other inactive status items.
+        guard let button = item.button else { return }
+        button.image = snapshot?.active == true ? busyIcon : idleIcon
+        button.appearsDisabled = snapshot == nil
+        button.toolTip = "OpenBridge — \(message)"
+        button.setAccessibilityLabel("OpenBridge, \(message)")
     }
     @objc func openManager() {
         if window == nil {
@@ -132,8 +209,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+    func failure(_ message: String) -> NSError { NSError(domain: "OpenBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
     func request(_ path: String, method: String = "GET", body: Data? = nil, timeout: TimeInterval = 20, completion: @escaping @MainActor (Result<Data, Error>) -> Void) {
-        guard let key = path.hasPrefix("/bridge/") ? adminKey : bridgeKey else { completion(.failure(NSError(domain: "OpenBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "Start the bridge first."]))); return }
+        guard let key = path.hasPrefix("/bridge/") ? adminKey : bridgeKey else { completion(.failure(failure("Start the bridge first."))); return }
         var req = URLRequest(url: URL(string: endpoint + path)!)
         req.httpMethod = method; req.httpBody = body; req.timeoutInterval = timeout
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
@@ -157,10 +235,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         polling = true
         request("/bridge/status", timeout: 1) { result in
             self.polling = false
+            // A status read that started before a configuration write would undo the optimistic update.
+            guard self.pendingWrites == 0 else { return }
             switch result {
             case .success(let data):
                 do {
                     self.snapshot = try JSONDecoder().decode(BridgeSnapshot.self, from: data)
+                    self.storedProviders = self.snapshot?.config.providers
                     self.message = self.snapshot?.maintenance == true ? "CLI maintenance" : self.snapshot?.active == true ? "Busy" : "Running"
                     if !self.hydratedKeys {
                         self.hydratedKeys = true
@@ -179,7 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
     @objc func start() {
         guard child == nil, snapshot == nil, !maintenanceRunning else { return }
-        guard FileManager.default.isExecutableFile(atPath: node) else { feedback = "The bundled Node runtime is missing. Rebuild the app."; openManager(); return }
+        guard FileManager.default.isExecutableFile(atPath: node) else { issue = Issue(title: "Bridge could not start", message: "The bundled Node runtime is missing. Rebuild the app."); openManager(); return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: node)
         process.arguments = [root.appendingPathComponent("src/server.mjs").path]
@@ -189,84 +270,176 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         for key in ["BRIDGE_API_KEY", "COMMAND_CODE_API_KEY", "COMMAND_CODE_MODEL"] { env.removeValue(forKey: key) }
         env["PATH"] = "/usr/local/bin:/opt/homebrew/bin:\(NSHomeDirectory())/.local/bin:/usr/bin:/bin"
         process.environment = env
-        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
-        process.terminationHandler = { process in Task { @MainActor in self.child = nil; self.snapshot = nil; self.hydratedKeys = false; self.message = process.terminationStatus == 0 ? "Stopped" : "Start failed (\(process.terminationStatus))"; self.rebuildMenu() } }
+        // Keep the tail of the server's error output so a failed start can explain itself (for example a busy port).
+        let errors = Pipe()
+        process.standardOutput = FileHandle.nullDevice; process.standardError = errors
+        serverLog = ""
+        errors.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
+            let text = String(decoding: data, as: UTF8.self)
+            Task { @MainActor in if let self { self.serverLog = String((self.serverLog + text).suffix(8192)) } }
+        }
+        process.terminationHandler = { process in
+            let status = process.terminationStatus
+            Task { @MainActor in
+                self.child = nil; self.snapshot = nil; self.hydratedKeys = false
+                self.message = status == 0 ? "Stopped" : "Stopped unexpectedly"
+                if status != 0 {
+                    let log = self.serverLog.trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.issue = Issue(title: "The bridge stopped", message: "The server exited with code \(status)." + (log.isEmpty ? "" : " See details for its error output."), details: log.isEmpty ? nil : log)
+                    self.openManager()
+                }
+                self.rebuildMenu()
+            }
+        }
         do { try process.run(); child = process; message = "Starting…"; hydratedKeys = false; rebuildMenu() }
-        catch { feedback = error.localizedDescription; message = "Start failed"; openManager() }
+        catch { issue = Issue(title: "Bridge could not start", message: error.localizedDescription); message = "Start failed"; openManager() }
     }
     @objc func stop() { child?.terminate(); message = "Stopping…"; rebuildMenu() }
     @objc func cancel() { request("/bridge/cancel", method: "POST") { _ in self.poll() } }
     func choose(_ id: String) {
         request("/bridge/model", method: "POST", body: jsonData(["model": id])) { result in
-            if case .failure(let error) = result { self.feedback = error.localizedDescription }
+            if case .failure(let error) = result { self.issue = Issue(title: "Could not select the model", message: error.localizedDescription) }
             self.poll()
         }
     }
+    var lastCheck = Date.distantPast
+    func refreshChecksIfStale() { if Date().timeIntervalSince(lastCheck) > 15 { refreshChecks() } }
     func refreshChecks() {
         guard !checking, snapshot != nil, !maintenanceRunning else { return }
-        checking = true
+        checking = true; lastCheck = Date()
         request("/bridge/diagnostics", method: "POST", timeout: 25) { result in
             self.checking = false
-            if case .failure(let error) = result { self.feedback = error.localizedDescription }
+            if case .failure(let error) = result { self.issue = Issue(title: "Installation check failed", message: error.localizedDescription) }
+            self.relocateMissingCLIs()
             self.poll()
         }
     }
-    func saveProvider(_ provider: ProviderRecord, secret: String, completion: @escaping (Bool) -> Void = { _ in }) {
-        guard var config = snapshot?.config else { feedback = "Start the bridge first."; return }
-        if let index = config.providers.firstIndex(where: { $0.id == provider.id }) { config.providers[index] = provider } else { config.providers.append(provider) }
-        if !config.providers.contains(where: { $0.enabled && $0.models.contains(where: { $0.enabled && $0.id == config.selectedModel }) }) {
-            guard let replacement = config.providers.filter(\.enabled).flatMap(\.models).first(where: \.enabled) else { feedback = "Keep at least one model enabled."; return }
-            config.selectedModel = replacement.id
-        }
-        saving = true
-        let body: Data
-        do { body = try JSONEncoder().encode(config) } catch { saving = false; feedback = error.localizedDescription; return }
-        request("/bridge/config", method: "PUT", body: body) { result in
-            self.saving = false
-            switch result {
-            case .success:
-                if !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    if self.storeProviderKey(provider.id, secret) { self.uploadKey(provider.id, secret) }
-                    else { self.feedback = "Provider saved; could not save key to Keychain."; self.poll(); completion(false); return }
-                }
-                self.feedback = "Settings saved. New requests use this configuration."
-                self.poll(); completion(true)
-            case .failure(let error): self.feedback = error.localizedDescription; completion(false)
+    // A CLI that moved (for example from npm to the native installer) is found again without asking for a path.
+    func cliCandidates(_ type: String) -> [String] {
+        let name = ["claude": "claude", "codex": "codex", "antigravity": "agy"][type] ?? ""
+        let home = NSHomeDirectory()
+        return [home + "/.local/bin/" + name, "/opt/homebrew/bin/" + name, "/usr/local/bin/" + name, home + "/.claude/local/" + name]
+    }
+    func relocateMissingCLIs() {
+        for provider in providers where provider.type != "openai" && !FileManager.default.isExecutableFile(atPath: provider.cliPath) {
+            if let found = cliCandidates(provider.type).first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+                updateProvider(provider.id, change: { $0.cliPath = found }, onError: { _ in }, onSuccess: { self.refreshChecks() })
             }
         }
     }
-    func discover(_ providerID: String) {
-        guard !discovering, !maintenanceRunning else { return }; discovering = true
-        request("/bridge/discover", method: "POST", body: jsonData(["providerID": providerID]), timeout: 25) { result in
-            self.discovering = false
-            do {
-                let data = try result.get()
-                let rows = try JSONSerialization.jsonObject(with: data) as? [[String: String]] ?? []
-                guard var provider = self.snapshot?.config.providers.first(where: { $0.id == providerID }) else { return }
-                var count = 0
-                for row in rows {
-                    guard let upstream = row["id"] else { continue }
-                    let id = providerID + "/" + upstream
-                    if let index = provider.models.firstIndex(where: { $0.id == id }) {
-                        provider.models[index].source = row["source"] ?? (provider.type == "openai" ? "Provider API" : "Provider CLI")
-                        provider.models[index].resolvedModel = row["resolvedModel"]
-                    } else {
-                        provider.models.append(ModelRecord(id: id, upstreamModel: upstream, name: row["name"] ?? upstream, enabled: false, source: row["source"] ?? (provider.type == "openai" ? "Provider API" : "Provider CLI"), resolvedModel: row["resolvedModel"]))
-                        count += 1
-                    }
-                }
-                self.saveProvider(provider, secret: "") { success in
-                    if success { self.feedback = "Fetched \(rows.count) models; \(count) new models added, disabled. Existing selections were kept." }
-                }
-            } catch { self.feedback = error.localizedDescription }
+
+    // Every change is sent at once; the server validates and persists it. Errors go to `onError`, or an alert.
+    func updateConfig(_ change: (inout BridgeConfiguration) -> Void, onError: ((String) -> Void)? = nil, onSuccess: (() -> Void)? = nil) {
+        let report: (String) -> Void = { message in
+            if let onError { onError(message) } else { self.issue = Issue(title: "Could not save the change", message: message) }
+        }
+        guard var config = snapshot?.config else { report("Start the bridge first."); return }
+        change(&config)
+        if !config.providers.contains(where: { $0.enabled && $0.models.contains(where: { $0.enabled && $0.id == config.selectedModel }) }) {
+            guard let replacement = config.providers.filter(\.enabled).flatMap(\.models).first(where: \.enabled) else { report("Keep at least one model enabled."); return }
+            config.selectedModel = replacement.id
+        }
+        let body: Data
+        do { body = try JSONEncoder().encode(config) } catch { report(error.localizedDescription); return }
+        snapshot?.config = config
+        pendingWrites += 1; saving = true
+        request("/bridge/config", method: "PUT", body: body) { result in
+            self.pendingWrites -= 1; self.saving = self.pendingWrites > 0
+            switch result {
+            case .success: onSuccess?()
+            case .failure(let error): report(error.localizedDescription)
+            }
+            self.poll()
         }
     }
-    func testModel(_ model: String) {
-        guard testingModel == nil else { return }; testingModel = model
-        request("/v1/chat/completions", method: "POST", body: jsonData(["model": model, "messages": [["role": "user", "content": "Reply with exactly: bridge works"]]]), timeout: 125) { result in
-            self.testingModel = nil
-            switch result { case .success: self.feedback = "Test request succeeded for \(model)."; case .failure(let error): self.feedback = "Test failed: \(error.localizedDescription)" }
-            self.poll()
+    func updateProvider(_ id: String, change: @escaping (inout ProviderRecord) -> Void, onError: ((String) -> Void)? = nil, onSuccess: (() -> Void)? = nil) {
+        updateConfig({ config in
+            if let index = config.providers.firstIndex(where: { $0.id == id }) { change(&config.providers[index]) }
+        }, onError: onError, onSuccess: onSuccess)
+    }
+    func updateModel(_ id: String, change: @escaping (inout ModelRecord) -> Void) {
+        updateConfig { config in
+            for p in config.providers.indices {
+                if let m = config.providers[p].models.firstIndex(where: { $0.id == id }) { change(&config.providers[p].models[m]) }
+            }
+        }
+    }
+    func model(_ id: String) -> ModelRecord? { snapshot?.config.providers.lazy.flatMap(\.models).first { $0.id == id } }
+    func setEffort(_ id: String, _ effort: String?) { updateModel(id) { $0.effort = effort } }
+    func addProvider(_ provider: ProviderRecord, secret: String, completion: @escaping (String?) -> Void) {
+        let loaded = { self.requestedSelection = provider.id; self.discover(provider.id) }
+        updateConfig({ $0.providers.append(provider) }, onError: { completion($0) }, onSuccess: {
+            if secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { loaded(); completion(nil) }
+            else { self.saveKey(provider.id, secret) { error in if error == nil { loaded() }; completion(error) } }
+        })
+    }
+    // Models are listed per family; family shortcuts (claude/sonnet) live under Advanced instead.
+    func shortcuts(_ provider: ProviderRecord) -> [ModelRecord] {
+        (snapshot?.models ?? []).filter { $0.providerID == provider.id && $0.alias }.compactMap { entry in provider.models.first { $0.id == entry.id } }
+    }
+    func currentVersionName(_ shortcut: ModelRecord, _ provider: ProviderRecord) -> String? {
+        guard let resolved = shortcut.resolvedModel, let model = provider.models.first(where: { $0.upstreamModel == resolved }) else { return shortcut.resolvedModel }
+        return displayName(model, in: provider)
+    }
+    func pickerLabel(_ entry: CatalogEntry, _ provider: ProviderRecord) -> String {
+        guard let model = provider.models.first(where: { $0.id == entry.id }) else { return entry.name }
+        return entry.alias ? displayName(model, in: provider) + " · Automatic" : displayName(model, in: provider)
+    }
+    func families(_ provider: ProviderRecord, search: String) -> [FamilyGroup] {
+        var groups: [FamilyGroup] = []
+        for entry in snapshot?.models ?? [] where entry.providerID == provider.id {
+            guard let model = provider.models.first(where: { $0.id == entry.id }) else { continue }
+            if !search.isEmpty && !(model.name + " " + model.id).localizedCaseInsensitiveContains(search) { continue }
+            let name = provider.type == "claude" && entry.familyName.hasPrefix("Claude ") ? String(entry.familyName.dropFirst("Claude ".count)) : entry.familyName
+            if groups.last?.id != entry.family { groups.append(FamilyGroup(id: entry.family, name: name)) }
+            if entry.alias { groups[groups.count - 1].aliases.append(model) } else { groups[groups.count - 1].versions.append(model) }
+        }
+        // A family that has only a shortcut still needs a row to switch on.
+        return groups.map { group in
+            var group = group
+            if group.versions.isEmpty { group.versions = group.aliases }
+            return group
+        }.filter { !$0.versions.isEmpty }
+    }
+    func discover(_ providerID: String) {
+        guard discovering == nil, !maintenanceRunning else { return }
+        discovering = providerID
+        request("/bridge/discover", method: "POST", body: jsonData(["providerID": providerID]), timeout: 25) { result in
+            self.discovering = nil
+            let rows: [DiscoveredModel]
+            do { rows = try JSONDecoder().decode([DiscoveredModel].self, from: try result.get()) }
+            catch { self.discoveryStatus[providerID] = InlineStatus(text: "Could not fetch models. Existing models were kept.", failed: true, details: error.localizedDescription); return }
+            var added = 0, removed = 0
+            self.updateProvider(providerID, change: { provider in
+                let fallback = provider.type == "openai" ? "Provider API" : "Provider CLI"
+                let ids = Set(rows.map { providerID + "/" + $0.id })
+                for row in rows {
+                    let id = providerID + "/" + row.id
+                    if let index = provider.models.firstIndex(where: { $0.id == id }) {
+                        var model = provider.models[index]
+                        model.source = row.source ?? fallback; model.resolvedModel = row.resolvedModel
+                        model.efforts = row.efforts; model.defaultEffort = row.defaultEffort
+                        if let effort = model.effort, row.efforts?.contains(effort) != true { model.effort = nil }
+                        provider.models[index] = model
+                    } else {
+                        provider.models.append(ModelRecord(id: id, upstreamModel: row.id, name: row.name ?? row.id, enabled: false, source: row.source ?? fallback, resolvedModel: row.resolvedModel, efforts: row.efforts, defaultEffort: row.defaultEffort))
+                        added += 1
+                    }
+                }
+                // Drop disabled entries an earlier fetch added that the catalogue no longer lists; enabled and manual models stay.
+                let before = provider.models.count
+                provider.models.removeAll { !$0.enabled && $0.source != nil && !ids.contains($0.id) }
+                removed = before - provider.models.count
+            }, onError: { message in
+                self.discoveryStatus[providerID] = InlineStatus(text: "Fetched models could not be saved.", failed: true, details: message)
+            }, onSuccess: {
+                let time = Date().formatted(date: .omitted, time: .shortened)
+                var text = "Fetched \(rows.count) models at \(time): \(added) new, off by default"
+                if removed > 0 { text += "; \(removed) outdated entries removed" }
+                self.discoveryStatus[providerID] = InlineStatus(text: text + ".")
+            })
         }
     }
     func keyQuery(_ provider: String) -> [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.openbridge.provider", kSecAttrAccount as String: provider] }
@@ -285,9 +458,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         if code == errSecItemNotFound { var entry = keyQuery(provider); entry.merge(value) { _, new in new }; code = SecItemAdd(entry as CFDictionary, nil) }
         return code == errSecSuccess
     }
+    func saveKey(_ provider: String, _ key: String, completion: @escaping (String?) -> Void) {
+        guard storeProviderKey(provider, key) else { completion("Could not save the key to Keychain."); return }
+        request("/bridge/credentials", method: "POST", body: jsonData(["providerID": provider, "key": key])) { result in
+            if case .failure(let error) = result { completion(error.localizedDescription) } else { completion(nil) }
+            self.poll()
+        }
+    }
     func uploadKey(_ provider: String, _ key: String) {
         request("/bridge/credentials", method: "POST", body: jsonData(["providerID": provider, "key": key])) { result in
-            if case .failure(let error) = result { self.feedback = error.localizedDescription }; self.poll()
+            if case .failure(let error) = result { self.issue = Issue(title: "Could not load an API key", message: error.localizedDescription) }
+            self.poll()
         }
     }
     func maintainCLI(_ plan: CLIMaintenancePlan) {
@@ -303,16 +484,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     self.maintenanceRunning = false; self.rebuildMenu()
                     self.refreshChecks(); self.poll()
                 }
-                let unlock = {
-                    if locked {
-                        self.request("/bridge/maintenance", method: "POST", body: self.jsonData(["enabled": false])) { result in
-                            if case .failure(let error) = result { self.maintenanceOutput += "\nCould not resume the bridge; restart it: " + error.localizedDescription }
-                            resume()
-                        }
-                    } else { resume() }
-                }
-
-                unlock()
+                if locked {
+                    self.request("/bridge/maintenance", method: "POST", body: self.jsonData(["enabled": false])) { result in
+                        if case .failure(let error) = result { self.maintenanceOutput += "\nCould not resume the bridge; restart it: " + error.localizedDescription }
+                        resume()
+                    }
+                } else { resume() }
             }
         }
         let run = {
@@ -323,7 +500,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             request("/bridge/maintenance", method: "POST", body: jsonData(["enabled": true])) { result in
                 switch result {
                 case .success: run()
-                case .failure(let error): self.maintenanceRunning = false; self.maintenanceOutput = error.localizedDescription
+                case .failure(let error): self.maintenanceRunning = false; self.maintenanceOutput = error.localizedDescription; self.rebuildMenu()
                 }
             }
         } else { run() }
@@ -331,7 +508,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func resumeBridgeAfterMaintenance() {
         guard !maintenanceRunning else { return }
         request("/bridge/maintenance", method: "POST", body: jsonData(["enabled": false])) { result in
-            if case .failure(let error) = result { self.feedback = error.localizedDescription }
+            if case .failure(let error) = result { self.issue = Issue(title: "Could not resume requests", message: error.localizedDescription) }
             self.poll()
         }
     }
@@ -339,12 +516,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let panel = NSOpenPanel(); panel.title = "Choose CLI executable"; panel.prompt = "Choose"; panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false; panel.showsHiddenFiles = true
         return panel.runModal() == .OK ? panel.url?.path : nil
     }
-    func installInstructions(_ type: String) {
-        let links = ["claude": "https://code.claude.com/docs/en/setup", "codex": "https://developers.openai.com/codex/cli", "antigravity": "https://www.antigravity.google/docs/getting-started?tab=cli"]
-        if let value = links[type], let url = URL(string: value) { NSWorkspace.shared.open(url) }
-    }
     func login(_ provider: ProviderRecord) {
-        guard FileManager.default.isExecutableFile(atPath: provider.cliPath) else { feedback = "Install the CLI first or choose an executable file."; return }
+        guard FileManager.default.isExecutableFile(atPath: provider.cliPath) else { issue = Issue(title: "CLI not found", message: "Install the CLI first or choose an executable file."); return }
         let quote: (String) -> String = { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
         let suffix = provider.type == "claude" ? " auth login" : provider.type == "codex" ? " login" : ""
         let script = "#!/bin/zsh\ncd \(quote(state.path))\nexec \(quote(provider.cliPath))\(suffix)\n"
@@ -353,16 +526,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             try script.write(to: file, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
             NSWorkspace.shared.open(file)
-        } catch { feedback = error.localizedDescription }
+        } catch { issue = Issue(title: "Could not open sign-in", message: error.localizedDescription) }
     }
     func copy(_ value: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value, forType: .string) }
-    @objc func copyModel() { if let id = snapshot?.selectedModelID { copy(id); feedback = "Model ID copied: \(id)" } }
+    @objc func copyModel() { if let id = snapshot?.selectedModelID { copy(id) } }
     func copyURL() { copy(endpoint + "/v1") }
     func copyKey() { if let key = bridgeKey { copy(key) } }
     @objc func copyConfig() { if let key = bridgeKey, let id = snapshot?.selectedModelID { copy("API type: OpenAI Chat Completions\nBase URL: \(endpoint)/v1\nAPI key: \(key)\nModel: \(id)\n") } }
     @objc func quit() { NSApp.terminate(nil) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if maintenanceRunning { feedback = "Wait for CLI maintenance to finish before quitting."; openManager(); return .terminateCancel }
+        if maintenanceRunning { issue = Issue(title: "CLI update in progress", message: "Wait for the update to finish before quitting."); openManager(); return .terminateCancel }
         guard let process = child, process.isRunning else { return .terminateNow }
         process.terminationHandler = { _ in Task { @MainActor in NSApp.reply(toApplicationShouldTerminate: true) } }
         process.terminate(); return .terminateLater
@@ -372,6 +545,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 struct OpenBridgeMain {
     @MainActor static func main() {
         let app = NSApplication.shared; let delegate = AppDelegate(); app.delegate = delegate
-        app.setActivationPolicy(.accessory); withExtendedLifetime(delegate) { app.run() }
+        app.setActivationPolicy(.regular); withExtendedLifetime(delegate) { app.run() }
     }
 }

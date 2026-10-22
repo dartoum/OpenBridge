@@ -61,7 +61,10 @@ message arrays, tool results, finish reasons and upstream usage in JSON and SSE.
 Clients execute API functions; never execute them in the bridge. CLI adapters normalize text arrays. Claude additionally maps response_format
 json_schema to --json-schema and validates json_object responses. Buffer
 structured replies, never stream unstructured preamble. Other unsupported
-controls/functions return 422. Do not silently discard options or imply CLI parity with API providers.
+controls/functions return 422. The only options a CLI route may drop are the
+harmless length/sampling ones (`IGNORED_ON_CLI` in src/server.mjs), and then
+always with an `X-OpenBridge-Ignored` response header. Never drop tools, `n` or
+anything else that changes the result, and do not imply CLI parity with API providers.
 
 All shipped UI/diagnostic text is English. Preserve user-provided names. Keep
 main text at 14pt and secondary text at least 13pt. Bound notifications to the
@@ -75,12 +78,32 @@ existing enabled flags and names, add new IDs disabled, and expose source and
 alias resolution. Public/catalogue presence is not account access. CLI init
 model metadata is the source of served-model identity, not model self-report.
 
-Provider save actions belong in a pinned bottom bar outside the scrolling form.
-Show saved/unsaved state and retain entered secrets on failed saves.
+Provider pages apply changes at once: switches and pickers immediately, text
+fields on Return or focus loss. No Save button or bottom bar; the server
+validates and a rejected value stays in its field with the reason beneath it.
+Show results next to the control that caused them. Reserve system alerts for
+errors that need attention, with full text behind Show Details. Do not add
+window-wide banners or toasts.
 
-Tools is update-only: never install missing CLIs or swap installation methods.
+Models are shown per family, newest version first. Family aliases (which follow
+the CLI) are shortcut IDs under Advanced, not model rows; users need not know
+about CLI defaults. There is no Test button: do not send requests to a person's
+account unasked; show the outcome of real requests instead. Grouping comes from model IDs in
+src/model-families.mjs and is presentation only; routing uses configured IDs.
+Thinking is chosen on the Bridge page only and remembered per model, limited to levels the CLI itself reported
+(`efforts`), overridable per request with `reasoning_effort`. Never send a level
+the model did not report.
+
+The app is a regular Dock app (standard menus, Dock menu, drawn icon); the menu
+bar item is secondary. Do not ask users for setup facts the app can detect: CLI
+locations are found automatically and the path is only under Advanced. Do not
+add refresh buttons for checks that run on page open, app activation and after
+changes. Do not link vendor install pages; their URLs change.
+
+CLI updates live on the CLI provider's page, not in a separate area, and are
+update-only: never install missing CLIs or swap installation methods.
 Native self-updaters, recognized Homebrew casks and matched-prefix npm updates
-are supported; unknown/custom layouts point to official instructions. Preview
+are supported; unknown/custom layouts are explained, never overwritten. Preview
 commands before the user starts them. Execute fixed programs/argument arrays;
 never interpolate provider paths into shell commands. No sudo or billing fallback.
 Only the native app executes updaters; management HTTP routes only pause/resume

@@ -7,6 +7,9 @@ struct ModelRecord: Codable, Identifiable, Equatable {
     var enabled: Bool
     var source: String?
     var resolvedModel: String?
+    var efforts: [String]?
+    var defaultEffort: String?
+    var effort: String?
 }
 struct ProviderRecord: Codable, Identifiable, Equatable {
     var id: String
@@ -22,12 +25,24 @@ struct BridgeConfiguration: Codable {
     var selectedModel: String
     var providers: [ProviderRecord]
 }
+// Display grouping computed by the server; the list is already sorted per provider.
+struct CatalogEntry: Codable {
+    var id: String
+    var name: String
+    var enabled: Bool
+    var providerID: String
+    var family: String
+    var familyName: String
+    var version: String
+    var alias: Bool
+}
 struct DiagnosticRecord: Codable, Identifiable {
     var providerID: String
     var installed: Bool
     var path: String
     var version: String
     var auth: String
+    var loggedIn: Bool?
     var detail: String
     var checkedAt: String
     var id: String { providerID }
@@ -38,6 +53,7 @@ struct RequestCheck: Codable {
     var durationMs: Int
     var message: String?
     var resolvedModel: String?
+    var effort: String?
 }
 struct RuntimeRecord: Codable { var version: String; var path: String }
 struct BridgeSnapshot: Codable {
@@ -48,6 +64,7 @@ struct BridgeSnapshot: Codable {
     var activeModel: String?
     var active: Bool
     var maintenance: Bool?
+    var models: [CatalogEntry]
     var config: BridgeConfiguration
     var diagnostics: [DiagnosticRecord]
     var checks: [String: RequestCheck]
@@ -59,24 +76,48 @@ struct BridgeSnapshot: Codable {
     var lastDurationMs: Int?
 }
 
+struct FamilyGroup: Identifiable {
+    let id: String
+    let name: String
+    var aliases: [ModelRecord] = []
+    var versions: [ModelRecord] = []
+}
+
+struct DetailText: Identifiable {
+    let id = UUID()
+    let text: String
+}
+
+let secondaryFont = Font.system(size: 13)
+let identifierFont = Font.system(size: 13, design: .monospaced)
+
+func effortLabel(_ value: String) -> String {
+    ["xhigh": "Extra high", "max": "Max", "ultra": "Ultra"][value] ?? value.prefix(1).uppercased() + value.dropFirst()
+}
+
+func checkTime(_ value: String) -> String {
+    let parser = ISO8601DateFormatter()
+    parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    guard let date = parser.date(from: value) else { return value }
+    return date.formatted(date: Calendar.current.isDateInToday(date) ? .omitted : .abbreviated, time: .shortened)
+}
+
 struct ManagerView: View {
     @ObservedObject var app: AppDelegate
     @State private var selection: String? = "overview"
     @State private var adding = false
+    @State private var details: DetailText?
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
-                Section {
-                    Label("Bridge", systemImage: "network").tag("overview")
-                    Label("Tools", systemImage: "wrench.and.screwdriver").tag("tools")
-                }
+                Label("Bridge", systemImage: "network").tag("overview")
                 Section("Providers") {
-                    ForEach(app.snapshot?.config.providers ?? []) { provider in
+                    ForEach(app.providers) { provider in
                         HStack {
                             Image(systemName: provider.type == "openai" ? "cloud" : "terminal")
                             Text(provider.name)
                             Spacer()
-                            if !provider.enabled { Image(systemName: "pause.circle").foregroundStyle(.secondary) }
+                            if !provider.enabled { Image(systemName: "pause.circle").foregroundStyle(.secondary).accessibilityLabel("Disabled") }
                         }.tag(provider.id)
                     }
                 }
@@ -88,31 +129,25 @@ struct ManagerView: View {
                     .disabled(app.snapshot == nil)
             }
         } detail: {
+            // Fixed geometry keeps long errors and model IDs from widening the window.
             GeometryReader { geometry in
-            VStack(spacing: 0) {
-                if let text = app.feedback {
-                    HStack(alignment: .center, spacing: 12) {
-                        Text(text.count > 140 ? "Open details to read the full message." : text)
-                            .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                        MessageDetails(message: text)
-                        Button { app.feedback = nil } label: { Image(systemName: "xmark") }
-                            .buttonStyle(.plain).accessibilityLabel("Dismiss notification")
-                    }.padding(12).background(.quaternary)
+                Group {
+                    if let selected = selection, let provider = app.providers.first(where: { $0.id == selected }) {
+                        ProviderDetail(app: app, provider: provider).id(provider.id)
+                    } else { Overview(app: app) }
                 }
-                if selection == "tools" { ToolsView(app: app) }
-                else if let selected = selection, let provider = app.snapshot?.config.providers.first(where: { $0.id == selected }) {
-                    ProviderDetail(app: app, provider: provider).id(provider.id)
-                } else { Overview(app: app) }
-            }
-            .frame(width: geometry.size.width, height: geometry.size.height)
+                .frame(width: geometry.size.width, height: geometry.size.height)
             }
         }
         .sheet(isPresented: $adding) { AddProviderSheet(app: app, presented: $adding) }
+        .onChange(of: app.requestedSelection) { _, id in if let id { selection = id; app.requestedSelection = nil } }
+        .alert(app.issue?.title ?? "", isPresented: Binding(get: { app.issue != nil }, set: { if !$0 { app.issue = nil } }), presenting: app.issue) { issue in
+            Button("OK") {}
+            if let text = issue.details { Button("Show Details") { details = DetailText(text: text) } }
+        } message: { issue in Text(issue.message) }
+        .sheet(item: $details) { DetailsSheet(message: $0.text) }
         .font(.system(size: 14))
         .navigationTitle("OpenBridge")
-        .toolbar {
-            ToolbarItem { Button { app.refreshChecks() } label: { Label("Check installation", systemImage: "arrow.clockwise") }.disabled(app.snapshot == nil || app.checking || app.maintenanceRunning) }
-        }
     }
 }
 
@@ -130,44 +165,54 @@ struct Overview: View {
                     Button(app.child == nil && app.snapshot == nil ? "Start bridge" : "Stop bridge") { app.child == nil && app.snapshot == nil ? app.start() : app.stop() }
                         .disabled(app.maintenanceRunning || (app.child == nil && app.snapshot != nil))
                 }
-                if app.snapshot != nil && app.child == nil { Text("This bridge runs outside the app. Stop it in its terminal.").font(.system(size: 13)).foregroundStyle(.secondary) }
+                if app.snapshot != nil && app.child == nil { Text("This bridge runs outside the app. Stop it in its terminal.").font(secondaryFont).foregroundStyle(.secondary) }
+            }
+            if app.snapshot?.maintenance == true && !app.maintenanceRunning {
+                Section("Requests paused") {
+                    Text("A CLI update was interrupted. Resume requests if no updater is still running.").foregroundStyle(.secondary)
+                    Button("Resume requests") { app.resumeBridgeAfterMaintenance() }
+                }
             }
             if let snapshot = app.snapshot {
                 Section("Model for new requests") {
                     Picker("Model", selection: Binding(get: { snapshot.selectedModelID }, set: { app.choose($0) })) {
                         ForEach(snapshot.config.providers.filter(\.enabled)) { provider in
-                            ForEach(provider.models.filter(\.enabled)) { model in
-                                Text("\(provider.name) · \(model.name)").tag(model.id)
+                            Section(provider.name) {
+                                ForEach(snapshot.models.filter { $0.providerID == provider.id && $0.enabled }, id: \.id) { entry in
+                                    Text(app.pickerLabel(entry, provider)).tag(entry.id)
+                                }
                             }
                         }
                     }
-                    LabeledContent("Model-ID") { Text(snapshot.selectedModelID).font(.system(.body, design: .monospaced)).textSelection(.enabled) }
-                    HStack {
-                        Button("Copy model ID") { app.copyModel() }
-                        Button("Copy connection settings") { app.copyConfig() }
+                    if let model = app.model(snapshot.selectedModelID), let efforts = model.efforts, !efforts.isEmpty {
+                        EffortPicker(model: model) { app.setEffort(model.id, $0) }
+                    }
+                    LabeledContent("Model ID") {
+                        Text(snapshot.selectedModelID).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                        CopyButton(title: "Copy") { app.copyModel() }
                     }
                     if snapshot.active {
                         HStack { ProgressView().controlSize(.small); Text("Running \(snapshot.activeModel ?? "request")"); Spacer(); Button("Cancel") { app.cancel() } }
                     }
-                    Text("Version IDs pin a model version. Family IDs such as ‘claude/haiku’ follow the CLI alias. ‘subscription’ follows your selection in this app.").font(.system(size: 13)).foregroundStyle(.secondary)
+                    Text("Apps that use ‘subscription’ follow this choice. Thinking applies to every request for this model; an app can override it with reasoning_effort.").font(secondaryFont).foregroundStyle(.secondary)
                 }
             }
             Section("Connect from another app") {
                 LabeledContent("API type", value: "OpenAI Chat Completions")
-                LabeledContent("Base URL") { Text(app.endpoint + "/v1").textSelection(.enabled); Button("Copy") { app.copyURL() } }
-                LabeledContent("API key") { Text("Local bridge key").foregroundStyle(.secondary); Button("Copy") { app.copyKey() } }
-                Text("Use from apps on this Mac. API providers support function calling and token limits. Claude also supports JSON output. Other CLI capabilities vary; see the provider page.").font(.system(size: 13)).foregroundStyle(.secondary)
+                LabeledContent("Base URL") { Text(app.endpoint + "/v1").textSelection(.enabled); CopyButton(title: "Copy") { app.copyURL() } }
+                LabeledContent("API key") { Text("Local bridge key").foregroundStyle(.secondary); CopyButton(title: "Copy") { app.copyKey() }.disabled(app.bridgeKey == nil) }
+                LabeledContent("All settings") { CopyButton(title: "Copy connection settings") { app.copyConfig() }.disabled(app.snapshot == nil) }
+                Text("For apps on this Mac. Subscription (CLI) models answer plain text; requests that use function calling, token limits or sampling options get an error. Claude adds JSON output and thinking levels. Use an API provider for apps that need those.").font(secondaryFont).foregroundStyle(.secondary)
             }
             Section("Installation") {
                 LabeledContent("Node.js", value: app.snapshot?.runtime.version ?? (FileManager.default.isExecutableFile(atPath: app.node) ? "Bundled" : "Missing"))
                 ForEach(app.snapshot?.diagnostics ?? []) { diagnostic in
                     VStack(alignment: .leading, spacing: 3) {
-                        HStack { Text(app.snapshot?.config.providers.first(where: { $0.id == diagnostic.providerID })?.name ?? diagnostic.providerID); Spacer(); Text(diagnostic.path.isEmpty ? "No CLI required" : diagnostic.installed ? "Installed" : "Missing").foregroundStyle(diagnostic.installed ? Color.secondary : .orange) }
-                        Text(diagnostic.auth).font(.system(size: 13)).foregroundStyle(.secondary)
+                        HStack { Text(app.providers.first(where: { $0.id == diagnostic.providerID })?.name ?? diagnostic.providerID); Spacer(); Text(diagnostic.path.isEmpty ? "No CLI required" : diagnostic.installed ? "Installed" : "Missing").foregroundStyle(diagnostic.installed ? Color.secondary : .orange) }
+                        Text(diagnostic.auth).font(secondaryFont).foregroundStyle(.secondary)
                     }
                 }
-                if app.snapshot?.diagnostics.isEmpty == true { Button("Check CLIs and logins") { app.refreshChecks() }.disabled(app.checking) }
-                if app.snapshot == nil { Text("Start the bridge to run checks. You can open the app without installing every provider CLI.").foregroundStyle(.secondary) }
+                if app.snapshot == nil { Text("Start the bridge to see installed CLIs and logins. You can open the app without installing every provider CLI.").foregroundStyle(.secondary) }
             }
             if let snapshot = app.snapshot {
                 Section("Requests since server start") {
@@ -180,113 +225,287 @@ struct Overview: View {
     }
 }
 
+// A whole row toggles its content, not only the chevron.
+struct ExpandRow<Content: View>: View {
+    let title: String
+    @Binding var isExpanded: Bool
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        Button { withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() } } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0)).frame(width: 12)
+                Text(title)
+                Spacer()
+            }.contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+        if isExpanded { content() }
+    }
+}
+
 struct ProviderDetail: View {
+    enum Field { case name, baseURL, cliPath, secret }
     @ObservedObject var app: AppDelegate
     let provider: ProviderRecord
-    @State private var draft: ProviderRecord
+    @State private var name: String
+    @State private var baseURL: String
+    @State private var cliPath: String
     @State private var secret = ""
-    @State private var managingCLI = false
+    @State private var fieldError: String?
+    @State private var updatingCLI = false
+    @State private var showAdvanced = false
     @State private var search = ""
-    @State private var modelName = ""
-    @State private var upstream = ""
-    init(app: AppDelegate, provider: ProviderRecord) { self.app = app; self.provider = provider; _draft = State(initialValue: provider) }
+    @State private var newName = ""
+    @State private var newID = ""
+    @FocusState private var focus: Field?
+    init(app: AppDelegate, provider: ProviderRecord) {
+        self.app = app; self.provider = provider
+        _name = State(initialValue: provider.name); _baseURL = State(initialValue: provider.baseURL); _cliPath = State(initialValue: provider.cliPath)
+    }
+    var editable: Bool { app.snapshot != nil && !app.maintenanceRunning }
     var diagnostic: DiagnosticRecord? { app.snapshot?.diagnostics.first { $0.providerID == provider.id } }
+    var installed: Bool { FileManager.default.isExecutableFile(atPath: provider.cliPath) }
+    var cliName: String { ["claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity"][provider.type] ?? "The CLI" }
+
+    // Settings apply as soon as a field is submitted or loses focus; the server validates every change.
+    func commit(_ field: Field) {
+        let save: (@escaping (inout ProviderRecord) -> Void) -> Void = { change in
+            app.updateProvider(provider.id, change: change, onError: { fieldError = $0 }, onSuccess: { fieldError = nil })
+        }
+        switch field {
+        case .name:
+            let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.isEmpty { name = provider.name } else if value != provider.name { save { $0.name = value } }
+        case .baseURL:
+            if baseURL != provider.baseURL { let value = baseURL; save { $0.baseURL = value } }
+        case .cliPath:
+            if cliPath != provider.cliPath { let value = cliPath; app.updateProvider(provider.id, change: { $0.cliPath = value }, onError: { fieldError = $0 }, onSuccess: { fieldError = nil; app.refreshChecks() }) }
+        case .secret:
+            guard !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            app.saveKey(provider.id, secret) { error in
+                fieldError = error
+                if error == nil { secret = "" }
+            }
+        }
+    }
+
     var body: some View {
         Form {
             Section {
-                HStack {
-                    VStack(alignment: .leading) { Text(provider.name).font(.title2.bold()); Text(provider.type == "openai" ? "OpenAI-compatible API" : "Subscription through official CLI").foregroundStyle(.secondary) }
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        // The title is the name field: one place to read and to rename.
+                        TextField("Name", text: $name).textFieldStyle(.plain).font(.title2.bold())
+                            .focused($focus, equals: .name).onSubmit { commit(.name) }.disabled(!editable)
+                            .help("Click to rename")
+                        Text(provider.type == "openai" ? "OpenAI-compatible API" : "Subscription").foregroundStyle(.secondary)
+                    }
                     Spacer()
-                    Toggle("Enabled", isOn: $draft.enabled).toggleStyle(.switch)
+                    Toggle("Enabled", isOn: Binding(get: { provider.enabled }, set: { value in app.updateProvider(provider.id) { $0.enabled = value } }))
+                        .labelsHidden().toggleStyle(.switch).disabled(!editable)
                 }
-                TextField("Name", text: $draft.name)
+                if app.snapshot == nil { Text("Start the bridge to change settings and models.").font(secondaryFont).foregroundStyle(.secondary) }
             }
-            Section(provider.type == "openai" ? "Connection" : "CLI installation and account") {
+            Section(provider.type == "openai" ? "Connection" : "Account") {
                 if provider.type == "openai" {
-                    TextField("Base URL", text: $draft.baseURL)
-                    SecureField(app.snapshot?.credentialProviders.contains(provider.id) == true ? "New API key (leave empty to keep)" : "API key (optional for local servers)", text: $secret)
-                    Text("The key is stored in macOS Keychain. Other apps use the separate bridge key.").font(.system(size: 13)).foregroundStyle(.secondary)
-                    if provider.id == "commandcode" { Text("GOAT requests use your plan allowance and any purchased extra credits.").font(.system(size: 13)).foregroundStyle(.secondary) }
-                } else {
-                    HStack { TextField("CLI path", text: $draft.cliPath); Button("Choose…") { if let path = app.pickExecutable() { draft.cliPath = path } } }
-                    if let diagnostic {
-                        LabeledContent("Installation", value: diagnostic.installed ? (diagnostic.version.isEmpty ? "Found" : "Found · \(diagnostic.version)") : "Missing or not executable")
-                        LabeledContent("Account", value: diagnostic.auth)
-                        if !diagnostic.detail.isEmpty { Text(diagnostic.detail).font(.system(size: 13)).foregroundStyle(.secondary) }
-                    } else { Text("Not checked yet").foregroundStyle(.secondary) }
+                    TextField("Base URL", text: $baseURL).focused($focus, equals: .baseURL).onSubmit { commit(.baseURL) }.disabled(!editable)
+                    SecureField(app.snapshot?.credentialProviders.contains(provider.id) == true ? "New API key (leave empty to keep)" : "API key (leave empty for local servers)", text: $secret)
+                        .focused($focus, equals: .secret).onSubmit { commit(.secret) }.disabled(!editable)
+                    Text("Press Return to store the key in macOS Keychain. Other apps use the separate bridge key.").font(secondaryFont).foregroundStyle(.secondary)
+                    if provider.id == "commandcode" { Text("Requests use your plan allowance and any purchased extra credits.").font(secondaryFont).foregroundStyle(.secondary) }
+                } else if installed {
+                    LabeledContent("Version", value: diagnostic.map { $0.version.isEmpty ? "Unknown" : $0.version } ?? "Checking…")
+                    if let diagnostic { LabeledContent("Account", value: diagnostic.auth) }
+                    if let detail = diagnostic?.detail, !detail.isEmpty { Text(detail).font(secondaryFont).foregroundStyle(.secondary) }
                     HStack {
-                        Button("Manage CLI…") { managingCLI = true }.disabled(draft != provider || app.maintenanceRunning)
-                        Button("Installation instructions") { app.installInstructions(provider.type) }
-                        Button("Sign in…") { app.login(provider) }
-                        Button("Check again") { app.refreshChecks() }.disabled(app.checking)
+                        // Only offer to sign in when the CLI says nobody is.
+                        if diagnostic?.loggedIn != true { Button("Sign in…") { app.login(provider) } }
+                        Button("Update CLI…") { updatingCLI = true }.disabled(app.maintenanceRunning || app.snapshot?.active == true)
                     }
+                } else {
+                    Label("\(cliName) is not installed", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                    Text("Install it, then come back: OpenBridge looks in the usual places by itself. Installed somewhere unusual? Choose the program.").font(secondaryFont).foregroundStyle(.secondary)
+                    Button("Choose program…") { if let path = app.pickExecutable() { cliPath = path; commit(.cliPath) } }.disabled(!editable)
                 }
+                if let fieldError { Text(fieldError).font(secondaryFont).foregroundStyle(.red).textSelection(.enabled) }
             }
-            Section("Capabilities") {
-                Text(provider.type == "openai" ? "Text arrays, generation options and function calling are forwarded to this API. Availability depends on the upstream model. Your client executes tool calls." : provider.type == "claude" ? "Text chat, text arrays, JSON objects and JSON Schema output. Structured responses are buffered until validated. Function calling and token limits are unavailable through this adapter." : "Text chat and text content arrays. Function calling and generation controls are unavailable through this CLI adapter.")
-                    .foregroundStyle(.secondary)
-            }
-            Section("Models") {
-                HStack {
-                    TextField("Search models", text: $search)
-                    Button(app.discovering ? "Fetching…" : "Fetch models") { app.discover(provider.id) }
-                        .disabled(app.discovering || app.saving || draft != provider)
-                }
-                Text("New models stay off until enabled and saved. Catalogue entries do not guarantee account access.")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
-                ForEach($draft.models) { $model in
-                    if search.isEmpty || (model.name + " " + model.id).localizedCaseInsensitiveContains(search) {
-                    VStack(alignment: .leading, spacing: 5) {
+            if app.snapshot != nil {
+                Section("Models") {
+                    HStack {
+                        TextField("Search models", text: $search)
+                        Button(app.discovering == provider.id ? "Fetching…" : "Fetch models") { app.discover(provider.id) }
+                            .disabled(app.discovering != nil || !editable)
+                    }
+                    if let status = app.discoveryStatus[provider.id] {
                         HStack {
-                            Toggle(isOn: $model.enabled) { VStack(alignment: .leading) { Text(model.name).lineLimit(2); Text(model.id).lineLimit(2).truncationMode(.middle).font(.system(size: 13, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled) } }
-                            Spacer()
-                            Button { app.copy(model.id) } label: { Image(systemName: "doc.on.doc") }.help("Copy this model ID")
-                            Button("Test") { app.testModel(model.id) }.disabled(!provider.enabled || !provider.models.contains(where: { $0.id == model.id && $0.enabled }) || app.snapshot?.active == true || app.testingModel != nil)
+                            Text(status.text).font(secondaryFont).foregroundStyle(status.failed ? Color.red : .secondary)
+                            if let details = status.details { DetailsButton(message: details) }
                         }
-                        if let source = model.source { Text(source.replacingOccurrences(of: "access unverified", with: "public catalogue")).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(2) }
-                        if let resolved = model.resolvedModel, resolved != model.upstreamModel {
-                            Text("CLI alias resolves to: \(resolved)").font(.system(size: 13, design: .monospaced)).foregroundStyle(.secondary).lineLimit(2)
-                        }
-                        if let check = app.snapshot?.checks[model.id] {
-                            if let resolved = check.resolvedModel { Text("Served model: \(resolved)").font(.system(size: 13, design: .monospaced)).foregroundStyle(.secondary).lineLimit(2) }
-                            HStack {
-                                Text(check.success ? "Successful request · \(check.at)" : "Request failed")
-                                    .font(.system(size: 13)).foregroundStyle(check.success ? Color.secondary : .orange)
-                                    .lineLimit(2)
-                                if !check.success { MessageDetails(message: check.message ?? "Unknown error") }
-                            }
-                        } else { Text(app.testingModel == model.id ? "Test request running…" : "No successful test yet").font(.system(size: 13)).foregroundStyle(.secondary) }
-                    }.padding(.vertical, 4)
+                    } else {
+                        Text("Fetch models loads the newest versions. New models start off; turn on the ones apps may use.").font(secondaryFont).foregroundStyle(.secondary)
                     }
                 }
-                HStack {
-                    TextField("Model name", text: $modelName)
-                    TextField("Upstream model-ID", text: $upstream)
-                    Button("Add") {
-                        let id = "\(draft.id)/\(upstream)"
-                        if !upstream.isEmpty && !draft.models.contains(where: { $0.id == id }) { draft.models.append(ModelRecord(id: id, upstreamModel: upstream, name: modelName.isEmpty ? upstream : modelName, enabled: false)); modelName = ""; upstream = "" }
-                    }.disabled(upstream.isEmpty)
+                ForEach(app.families(provider, search: search)) { group in
+                    FamilySection(app: app, provider: provider, group: group, searching: !search.isEmpty)
                 }
-
-                Text("Disabled models are unavailable through the API. A test uses your account allowance.").font(.system(size: 13)).foregroundStyle(.secondary)
+                Section {
+                    ExpandRow(title: "Advanced", isExpanded: $showAdvanced) {
+                        if provider.type == "openai" {
+                            HStack {
+                                TextField("Name", text: $newName)
+                                TextField("Model ID", text: $newID)
+                                Button("Add") {
+                                    let id = "\(provider.id)/\(newID)", name = newName.isEmpty ? newID : newName, upstream = newID
+                                    app.updateProvider(provider.id, change: { $0.models.append(ModelRecord(id: id, upstreamModel: upstream, name: name, enabled: false)) }, onError: { fieldError = $0 }, onSuccess: { newName = ""; newID = "" })
+                                }.disabled(newID.isEmpty || provider.models.contains(where: { $0.id == "\(provider.id)/\(newID)" }) || !editable)
+                            }
+                            Text("Only for models the endpoint does not list. Added models start off.").font(secondaryFont).foregroundStyle(.secondary)
+                        } else {
+                            HStack {
+                                TextField("Program", text: $cliPath).focused($focus, equals: .cliPath).onSubmit { commit(.cliPath) }
+                                Button("Choose…") { if let path = app.pickExecutable() { cliPath = path; commit(.cliPath) } }
+                            }.disabled(!editable)
+                            let shortcuts = app.shortcuts(provider)
+                            if !shortcuts.isEmpty {
+                                Text("Shortcut IDs always use the newest version \(cliName) offers by itself. Only for apps that already use them.").font(secondaryFont).foregroundStyle(.secondary)
+                                ForEach(shortcuts) { shortcut in
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(shortcut.id).font(identifierFont).textSelection(.enabled)
+                                            if let current = app.currentVersionName(shortcut, provider) { Text("Now \(current)").font(secondaryFont).foregroundStyle(.secondary) }
+                                        }
+                                        Spacer()
+                                        CopyIconButton(value: shortcut.id) { app.copy(shortcut.id) }
+                                        Toggle("Enabled", isOn: Binding(get: { shortcut.enabled }, set: { value in app.updateModel(shortcut.id) { $0.enabled = value } }))
+                                            .labelsHidden().toggleStyle(.switch).disabled(!editable)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         .formStyle(.grouped)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                Divider()
-                HStack {
-                    Text(draft != provider || !secret.isEmpty ? "Unsaved changes" : "All changes saved")
-                        .font(.system(size: 13)).foregroundStyle(.secondary)
-                    Spacer()
-                    Button(app.saving ? "Saving…" : "Save changes") { app.saveProvider(draft, secret: secret) { success in if success { secret = "" } } }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(app.saving || app.maintenanceRunning || (draft == provider && secret.isEmpty))
-                }.padding(.horizontal, 20).padding(.vertical, 12)
-            }.background(.bar)
+        .onChange(of: focus) { previous, _ in if let previous, previous != .secret { commit(previous) } }
+        .onChange(of: provider) { _, new in
+            if focus != .name { name = new.name }
+            if focus != .baseURL { baseURL = new.baseURL }
+            if focus != .cliPath { cliPath = new.cliPath }
         }
-        .sheet(isPresented: $managingCLI) { CLIMaintenanceSheet(app: app, provider: provider) }
-        .onChange(of: provider) { old, new in if draft == old { draft = new } }
+        .sheet(isPresented: $updatingCLI) { CLIMaintenanceSheet(app: app, provider: provider) }
+        .onAppear { app.refreshChecksIfStale() }
+    }
+}
+
+// Discovered names come from several catalogues; show one style (“Haiku 5.5”) without touching stored names.
+func displayName(_ model: ModelRecord, in provider: ProviderRecord) -> String {
+    guard provider.type == "claude", model.source != nil else { return model.name }
+    var name = model.name
+    if name.hasPrefix("Claude ") { name.removeFirst("Claude ".count) }
+    if name.hasSuffix(" (latest)") { name.removeLast(" (latest)".count) }
+    return name
+}
+
+struct FamilySection: View {
+    @ObservedObject var app: AppDelegate
+    let provider: ProviderRecord
+    let group: FamilyGroup
+    let searching: Bool
+    @State private var showOlder: Bool
+    init(app: AppDelegate, provider: ProviderRecord, group: FamilyGroup, searching: Bool) {
+        self.app = app; self.provider = provider; self.group = group; self.searching = searching
+        _showOlder = State(initialValue: group.versions.dropFirst().contains(where: \.enabled))
+    }
+    var older: [ModelRecord] { Array(group.versions.dropFirst()) }
+    var body: some View {
+        Section(group.name) {
+            if searching || group.versions.count < 3 {
+                ForEach(group.versions) { ModelRow(app: app, provider: provider, model: $0) }
+            } else {
+                ModelRow(app: app, provider: provider, model: group.versions[0])
+                ExpandRow(title: "Older versions (\(older.count))", isExpanded: $showOlder) {
+                    ForEach(older) { ModelRow(app: app, provider: provider, model: $0) }
+                }
+            }
+        }
+    }
+}
+
+struct ModelRow: View {
+    @ObservedObject var app: AppDelegate
+    let provider: ProviderRecord
+    let model: ModelRecord
+    var check: RequestCheck? { app.snapshot?.checks[model.id] }
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(displayName(model, in: provider)).lineLimit(2)
+                Text(model.id).font(identifierFont).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                if model.source?.hasPrefix("models.dev") == true { Text("Not confirmed for your account").font(secondaryFont).foregroundStyle(.secondary) }
+                status
+            }
+            Spacer(minLength: 12)
+            CopyIconButton(value: model.id) { app.copy(model.id) }
+            Toggle("Enabled", isOn: Binding(get: { model.enabled }, set: { value in app.updateModel(model.id) { $0.enabled = value } }))
+                .labelsHidden().toggleStyle(.switch).accessibilityLabel("Enable \(displayName(model, in: provider))")
+                .disabled(app.snapshot == nil || app.maintenanceRunning)
+        }.padding(.vertical, 2)
+    }
+    // What happened the last time an app really used this model.
+    @ViewBuilder var status: some View {
+        if let check {
+            if check.success {
+                Text("Last request succeeded · \(checkTime(check.at))").font(secondaryFont).foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 8) {
+                    Label("Last request failed", systemImage: "exclamationmark.circle").font(secondaryFont).foregroundStyle(.red)
+                    DetailsButton(message: check.message ?? "Unknown error")
+                }
+            }
+        }
+    }
+}
+
+struct EffortPicker: View {
+    let model: ModelRecord
+    let change: (String?) -> Void
+    var body: some View {
+        Picker("Thinking", selection: Binding(get: { model.effort ?? "" }, set: { change($0.isEmpty ? nil : $0) })) {
+            Text(model.defaultEffort.map { "Default (\(effortLabel($0)))" } ?? "Default").tag("")
+            Divider()
+            ForEach(model.efforts ?? [], id: \.self) { Text(effortLabel($0)).tag($0) }
+        }
+        .help("Thinking level for every request to \(model.id)")
+    }
+}
+
+// Confirms a copy in place instead of a window-wide notification.
+struct CopyButton: View {
+    let title: String
+    let action: () -> Void
+    @State private var copied = false
+    var body: some View {
+        Button(copied ? "Copied" : title) {
+            action(); copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+        }
+    }
+}
+struct CopyIconButton: View {
+    let value: String
+    let action: () -> Void
+    @State private var copied = false
+    var body: some View {
+        Button {
+            action(); copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+        } label: { Image(systemName: copied ? "checkmark" : "doc.on.doc").frame(width: 16) }
+            .buttonStyle(.borderless)
+            .help("Copy \(value)")
+            .accessibilityLabel(copied ? "Copied" : "Copy model ID")
     }
 }
 
@@ -296,82 +515,56 @@ struct AddProviderSheet: View {
     @State private var name = ""
     @State private var baseURL = ""
     @State private var secret = ""
-    @State private var upstream = ""
+    @State private var error: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Add provider").font(.title2.bold())
-            Text("Add an OpenAI-compatible API. Built-in subscription providers are already in the sidebar.").foregroundStyle(.secondary)
+            Text("Connect any OpenAI-compatible API. OpenBridge loads its model list for you.").foregroundStyle(.secondary)
             TextField("Name", text: $name)
-            TextField("Base URL, e.g. https://api.example.com/v1", text: $baseURL)
-            SecureField("API key (optional)", text: $secret)
-            TextField("First upstream model ID", text: $upstream)
-            HStack { Spacer(); Button("Cancel") { presented = false }; Button("Add") {
-                let id = "provider-" + UUID().uuidString.lowercased().prefix(8)
-                let provider = ProviderRecord(id: String(id), name: name, type: "openai", enabled: true, cliPath: "", baseURL: baseURL, models: [ModelRecord(id: "\(id)/\(upstream)", upstreamModel: upstream, name: upstream, enabled: true)])
-                app.saveProvider(provider, secret: secret) { success in if success { presented = false } }
-            }.buttonStyle(.borderedProminent).disabled(name.isEmpty || baseURL.isEmpty || upstream.isEmpty || app.saving) }
+            TextField("Address, e.g. https://api.example.com/v1", text: $baseURL)
+            SecureField("API key", text: $secret)
+            Text("Leave the key empty for a server on this Mac, such as LM Studio or Ollama.").font(secondaryFont).foregroundStyle(.secondary)
+            if let error { Text(error).font(secondaryFont).foregroundStyle(.red).textSelection(.enabled) }
+            HStack {
+                Spacer()
+                Button("Cancel") { presented = false }.keyboardShortcut(.cancelAction)
+                Button("Add") {
+                    let provider = ProviderRecord(id: "provider-" + UUID().uuidString.lowercased().prefix(8), name: name, type: "openai", enabled: true, cliPath: "", baseURL: baseURL, models: [])
+                    app.addProvider(provider, secret: secret) { message in
+                        if let message { error = message } else { presented = false }
+                    }
+                }.keyboardShortcut(.defaultAction).disabled(name.isEmpty || baseURL.isEmpty || app.saving)
+            }
         }.padding(26).frame(width: 500)
     }
 }
 
-struct MessageDetails: View {
+struct DetailsButton: View {
     let message: String
     @State private var presented = false
     var body: some View {
         Button("Details") { presented = true }.fixedSize()
-            .sheet(isPresented: $presented) {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Message details").font(.title2.bold())
-                    ScrollView {
-                        Text(message).font(.system(size: 14, design: .monospaced))
-                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    HStack {
-                        Button("Copy details") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(message, forType: .string) }
-                        Spacer()
-                        Button("Close") { presented = false }.keyboardShortcut(.defaultAction)
-                    }
-                }.padding(24).frame(width: 600, height: 360)
-            }
+            .sheet(isPresented: $presented) { DetailsSheet(message: message) }
     }
 }
 
-struct ToolsView: View {
-    @ObservedObject var app: AppDelegate
-    @State private var selected: ProviderRecord?
+struct DetailsSheet: View {
+    let message: String
+    @Environment(\.dismiss) private var dismiss
     var body: some View {
-        Form {
-            Section {
-                Text("CLI tools").font(.title2.bold())
-                Text("Update existing CLI installations using their original installation method. Updates can refresh model support; account access and alias mappings can still differ.").foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Message details").font(.title2.bold())
+            ScrollView {
+                Text(message).font(.system(size: 14, design: .monospaced))
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            HStack {
+                CopyButton(title: "Copy details") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(message, forType: .string) }
+                Spacer()
+                Button("Close") { dismiss() }.keyboardShortcut(.defaultAction)
             }
-            if app.snapshot?.maintenance == true && !app.maintenanceRunning {
-                Section("Bridge paused") {
-                    Text("If no CLI updater is running, resume requests after interrupted maintenance.").foregroundStyle(.secondary)
-                    Button("Resume bridge") { app.resumeBridgeAfterMaintenance() }
-                }
-            }
-            ForEach(app.configuredProviders.filter { $0.type != "openai" }) { provider in
-                Section(provider.name) {
-                    let installed = FileManager.default.isExecutableFile(atPath: provider.cliPath)
-                    LabeledContent("Executable") { Text(provider.cliPath).font(.system(size: 13, design: .monospaced)).lineLimit(2).textSelection(.enabled) }
-                    LabeledContent("Installation", value: installed ? "Installed" : "Missing")
-                    if let check = app.snapshot?.diagnostics.first(where: { $0.providerID == provider.id }), !check.version.isEmpty {
-                        LabeledContent("Last checked version", value: check.version)
-                    }
-                    HStack {
-                        if installed { Button("Update CLI…") { selected = provider }.disabled(app.maintenanceRunning) }
-                        Button("Installation instructions") { app.installInstructions(provider.type) }
-                    }
-                }
-            }
-            Section {
-                Text("Install missing CLIs outside OpenBridge using the official instructions, then select their executable on the provider page. Node.js is bundled with OpenBridge. API providers such as Command Code do not need a CLI. After updating a CLI, use Fetch models on its provider page.").font(.system(size: 13)).foregroundStyle(.secondary)
-                Button("Check installed tools") { app.refreshChecks() }.disabled(app.snapshot == nil || app.checking || app.maintenanceRunning)
-            }
-        }.formStyle(.grouped)
-            .sheet(item: $selected) { provider in CLIMaintenanceSheet(app: app, provider: provider) }
+        }.padding(24).frame(width: 600, height: 360)
     }
 }
 
@@ -392,34 +585,37 @@ struct CLIMaintenanceSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Update \(provider.name) CLI").font(.title2.bold())
+                    if let version = app.snapshot?.diagnostics.first(where: { $0.providerID == provider.id })?.version, !version.isEmpty {
+                        LabeledContent("Installed version", value: version)
+                    }
                     switch plan {
                     case .success(let plan):
                         LabeledContent("Installation method", value: plan.method)
                         Text("Command").font(.headline)
-                        Text(plan.command).font(.system(size: 13, design: .monospaced)).textSelection(.enabled)
+                        Text(plan.command).font(identifierFont).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
-                        Text("Bridge executable after completion: \(plan.expectedPath)").font(.system(size: 13)).foregroundStyle(.secondary)
+                        Text("Bridge executable after completion: \(plan.expectedPath)").font(secondaryFont).foregroundStyle(.secondary)
                         Text("New bridge requests pause while this runs. No model choices or account logins are changed. Fetch models afterward to refresh the catalogue.").foregroundStyle(.secondary)
                         if app.snapshot?.active == true { Text("Wait for the active request to finish.").foregroundStyle(.orange) }
                     case .failure(let error): Text(error.localizedDescription).foregroundStyle(.orange)
                     }
                     if started {
                         if app.maintenanceRunning { ProgressView("Running CLI maintenance…") }
-                        Text(app.maintenanceOutput).font(.system(size: 13, design: .monospaced)).textSelection(.enabled)
+                        Text(app.maintenanceOutput).font(identifierFont).textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
             }
             Divider()
             HStack {
-                Button("Installation instructions") { app.installInstructions(provider.type) }
                 Spacer()
-                Button(started ? "Close" : "Cancel") { dismiss() }.disabled(app.maintenanceRunning)
+                Button(started ? "Close" : "Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(app.maintenanceRunning)
                 if case .success(let plan) = plan, !started {
                     Button(plan.title) { started = true; app.maintainCLI(plan) }
-                        .buttonStyle(.borderedProminent).disabled(app.maintenanceRunning || app.snapshot?.active == true)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(app.maintenanceRunning || app.snapshot?.active == true)
                 }
-            }.padding(16).background(.bar)
+            }.padding(16)
         }.frame(width: 640, height: 460)
             .interactiveDismissDisabled(app.maintenanceRunning)
     }

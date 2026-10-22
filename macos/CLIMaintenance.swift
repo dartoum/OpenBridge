@@ -14,7 +14,7 @@ struct CLIMaintenancePlan {
         let binaries = ["claude": "claude", "codex": "codex", "antigravity": "agy"]
         guard let name = names[type], let binary = binaries[type] else { throw failure("This provider does not require a CLI.") }
         let standard = home + "/.local/bin/" + binary
-        guard installed else { throw failure("This CLI is not installed at the configured path. Install it using the official instructions, then choose its executable on the provider page. OpenBridge only updates existing installations.") }
+        guard installed else { throw failure("This CLI is not installed. Install it first; OpenBridge only updates existing installations.") }
         for prefix in ["/opt/homebrew", "/usr/local"] {
             let packages = type == "claude" ? ["claude-code", "claude-code@latest"] : type == "codex" ? ["codex"] : ["antigravity-cli"]
             for package in packages where resolvedPath.hasPrefix(prefix + "/Caskroom/" + package + "/") {
@@ -31,7 +31,7 @@ struct CLIMaintenancePlan {
             return Self(title: "Update \(name)", method: "npm · existing prefix", executable: npm, arguments: ["install", "--global", "--prefix", prefix, package + "@latest"], expectedPath: path)
         }
         let native = type == "claude" ? resolvedPath.hasPrefix(home + "/.local/share/claude/versions/") : type == "codex" ? resolvedPath.hasPrefix(home + "/.codex/packages/standalone/") : path == standard && resolvedPath == standard
-        guard native else { throw failure("The installation method for this executable is unknown. Use Installation instructions or choose the original executable; OpenBridge will not overwrite it with a different installer.") }
+        guard native else { throw failure("The installation method for this program is unknown. Update it the way you installed it, or choose the original program under Advanced; OpenBridge will not overwrite it with a different installer.") }
         return Self(title: "Update \(name)", method: "Native self-updater", executable: path, arguments: ["update"], expectedPath: path)
     }
     static func failure(_ message: String) -> NSError { NSError(domain: "OpenBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
