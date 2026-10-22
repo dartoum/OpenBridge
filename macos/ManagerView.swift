@@ -310,7 +310,7 @@ struct ProviderDetail: View {
                         } else {
                             Text(provider.name).font(.title2.bold())
                         }
-                        Text(provider.type == "openai" ? "OpenAI-compatible API" : "Subscription").foregroundStyle(.secondary)
+                        if provider.type == "openai" { Text("OpenAI-compatible API").foregroundStyle(.secondary) }
                     }
                     Spacer()
                     Toggle("Enabled", isOn: Binding(get: { provider.enabled }, set: { value in app.updateProvider(provider.id) { $0.enabled = value } }))
