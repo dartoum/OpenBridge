@@ -380,9 +380,9 @@ struct ProviderDetail: View {
                         Text("\(list.hidden) more models. Search to find one and turn it on.").font(secondaryFont).foregroundStyle(.secondary)
                     }
                 }
-                Section {
-                    ExpandRow(title: "Advanced", isExpanded: $showAdvanced) {
-                        if provider.type == "openai" {
+                if provider.type == "openai" {
+                    Section {
+                        ExpandRow(title: "Advanced", isExpanded: $showAdvanced) {
                             HStack {
                                 TextField("Name", text: $newName)
                                 TextField("Model ID", text: $newID)
@@ -392,27 +392,6 @@ struct ProviderDetail: View {
                                 }.disabled(newID.isEmpty || provider.models.contains(where: { $0.id == "\(provider.id)/\(newID)" }) || !editable)
                             }
                             Text("Only for models the endpoint does not list. Added models start off.").font(secondaryFont).foregroundStyle(.secondary)
-                        } else {
-                            HStack {
-                                TextField("Program", text: $cliPath).focused($focus, equals: .cliPath).onSubmit { commit(.cliPath) }
-                                Button("Choose…") { if let path = app.pickExecutable() { cliPath = path; commit(.cliPath) } }
-                            }.disabled(!editable)
-                            let shortcuts = app.shortcuts(provider)
-                            if !shortcuts.isEmpty {
-                                Text("Shortcut IDs always use the newest version \(cliName) offers by itself. Only for apps that already use them.").font(secondaryFont).foregroundStyle(.secondary)
-                                ForEach(shortcuts) { shortcut in
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(shortcut.id).font(identifierFont).textSelection(.enabled)
-                                            if let current = app.currentVersionName(shortcut, provider) { Text("Now \(current)").font(secondaryFont).foregroundStyle(.secondary) }
-                                        }
-                                        Spacer()
-                                        CopyIconButton(value: shortcut.id) { app.copy(shortcut.id) }
-                                        Toggle("Enabled", isOn: Binding(get: { shortcut.enabled }, set: { value in app.updateModel(shortcut.id) { $0.enabled = value } }))
-                                            .labelsHidden().toggleStyle(.switch).disabled(!editable)
-                                    }
-                                }
-                            }
                         }
                     }
                 }

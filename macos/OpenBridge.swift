@@ -21,6 +21,7 @@ struct DiscoveredModel: Decodable {
     var resolvedModel: String?
     var efforts: [String]?
     var defaultEffort: String?
+    var alias: Bool?
 }
 
 @MainActor
@@ -372,14 +373,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             else { self.saveKey(provider.id, secret) { error in if error == nil { loaded() }; completion(error) } }
         })
     }
-    // Models are listed per family; family shortcuts (claude/sonnet) live under Advanced instead.
-    func shortcuts(_ provider: ProviderRecord) -> [ModelRecord] {
-        (snapshot?.models ?? []).filter { $0.providerID == provider.id && $0.alias }.compactMap { entry in provider.models.first { $0.id == entry.id } }
-    }
-    func currentVersionName(_ shortcut: ModelRecord, _ provider: ProviderRecord) -> String? {
-        guard let resolved = shortcut.resolvedModel, let model = provider.models.first(where: { $0.upstreamModel == resolved }) else { return shortcut.resolvedModel }
-        return displayName(model, in: provider)
-    }
     func pickerLabel(_ entry: CatalogEntry, _ provider: ProviderRecord) -> String {
         guard let model = provider.models.first(where: { $0.id == entry.id }) else { return entry.name }
         return entry.alias ? displayName(model, in: provider) + " · Automatic" : displayName(model, in: provider)
@@ -422,7 +415,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                         if let effort = model.effort, row.efforts?.contains(effort) != true { model.effort = nil }
                         provider.models[index] = model
                     } else {
-                        provider.models.append(ModelRecord(id: id, upstreamModel: row.id, name: row.name ?? row.id, enabled: false, source: row.source ?? fallback, resolvedModel: row.resolvedModel, efforts: row.efforts, defaultEffort: row.defaultEffort))
+                        // Claude's own family shortcuts (claude/sonnet) start on so apps that use them keep working; everything else starts off.
+                        let shortcut = provider.type == "claude" && row.alias == true
+                        provider.models.append(ModelRecord(id: id, upstreamModel: row.id, name: row.name ?? row.id, enabled: shortcut, source: row.source ?? fallback, resolvedModel: row.resolvedModel, efforts: row.efforts, defaultEffort: row.defaultEffort))
                         added += 1
                     }
                 }

@@ -44,6 +44,10 @@ process.stdin.on('data',data=>{const request=JSON.parse(data);console.log(JSON.s
   assert.deepEqual(ids, ['haiku', 'claude-haiku-4-5-20251001', 'opus', 'claude-opus-5-5']);
   assert.deepEqual(rows.find(r => r.id === 'claude-opus-5-5').efforts, ['low', 'medium', 'high', 'max']);
   assert.equal(rows.find(r => r.id === 'haiku').efforts, undefined);
+  // CLI shortcuts are flagged so the app can switch them on; explicit versions are not shortcuts.
+  assert.equal(rows.find(r => r.id === 'haiku').alias, true);
+  assert.equal(rows.find(r => r.id === 'opus').alias, true);
+  assert.equal(rows.find(r => r.id === 'claude-opus-5-5').alias, undefined);
 });
 
 test('configured effort reaches the CLI, requests may override it and unsupported levels are refused', async t => {

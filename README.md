@@ -33,8 +33,7 @@ A CLI provider page shows the installed version and login state, and offers
 **Sign in…** and **Update CLI…**. OpenBridge finds a CLI in the usual places
 (`~/.local/bin`, Homebrew) by itself and re-checks when you open the page, when
 the app returns to the front and after an update, so there is no refresh button.
-A different program can be chosen under **Advanced**, or via **Choose program…**
-when none is found. **Sign in…** only appears when the CLI reports that nobody is
+If no CLI is found, **Choose program…** lets you point to it. **Sign in…** only appears when the CLI reports that nobody is
 signed in. There is no test button: each model shows the outcome of the last
 real request an app made, and nothing is sent to your account on its own.
 
@@ -52,11 +51,11 @@ Models are one flat list with the model ID as a column, ordered by family and
 newest version first, with every model the provider offers (a thinking level
 that is part of a model ID, such as Antigravity's Low/Medium/High, is a separate
 row). An endpoint with a very long list (more than 40) shows only enabled models
-plus a hint; search to find and enable others. A provider may list up to 1000 models. Family shortcuts such as
-`claude/haiku` follow whatever version the CLI picks automatically; they are kept
-for apps that already use them and live under **Advanced** (shown as
-“Automatic” in the model picker). API providers can add a model ID by hand under
-**Advanced**. Search the list, or load new models with **Fetch models**. Claude, Codex, API and Antigravity discovery are supported;
+plus a hint; search to find and enable others. A provider may list up to 1000 models. Family shortcuts such as `claude/haiku` follow whatever version the CLI picks
+automatically, so apps that use them keep up with CLI updates. They are always
+switched on, have no switch of their own and are not listed on the provider page;
+they show up in the Bridge page list as “Automatic”. API providers can add a model
+ID by hand under **Advanced**. Search the list, or load new models with **Fetch models**. Claude, Codex, API and Antigravity discovery are supported;
 newly discovered models are initially off, and fetching removes only disabled
 catalogue entries that a previous fetch added and the catalogue no longer lists.
 

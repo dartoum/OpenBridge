@@ -93,8 +93,9 @@ window-wide banners or toasts.
 
 Models are one flat list (no family headings) with the ID as a column, newest
 version first, no "older versions" folding (thinking levels in IDs are not versions); lists above 40 show only enabled models until a search. Family aliases (which follow
-the CLI) are shortcut IDs under Advanced, not model rows; users need not know
-about CLI defaults. There is no Test button: do not send requests to a person's
+the CLI) are not listed on provider pages and have no switch: they start on, keep
+working for existing apps and show as “Automatic” on the Bridge page; users need
+not know about CLI defaults. There is no Test button: do not send requests to a person's
 account unasked; show the outcome of real requests instead. Ordering comes from model IDs in
 src/model-families.mjs and is presentation only; routing uses configured IDs.
 Thinking is chosen on the Bridge page only and remembered per model, limited to levels the CLI itself reported
@@ -103,7 +104,7 @@ the model did not report.
 
 The app is a regular Dock app (standard menus, Dock menu, drawn icon); the menu
 bar item is secondary. Do not ask users for setup facts the app can detect: CLI
-locations are found automatically and the path is only under Advanced. Do not
+locations are found automatically; the path is only asked for when none is found. Do not
 add refresh buttons for checks that run on page open, app activation and after
 changes. Do not link vendor install pages; their URLs change.
 

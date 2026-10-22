@@ -64,7 +64,7 @@ export function claudeModelRows(models) {
     if (typeof m.value !== 'string' || m.value === 'default') continue;
     const resolved = typeof m.resolvedModel === 'string' ? m.resolvedModel : m.value;
     const levels = efforts(m.supportsEffort === false ? [] : m.supportedEffortLevels);
-    rows.set(m.value, { id:m.value, name:m.displayName || m.value, source:'Claude CLI', resolvedModel:resolved, ...levels });
+    rows.set(m.value, { id:m.value, name:m.displayName || m.value, source:'Claude CLI', resolvedModel:resolved, ...(m.value !== resolved ? { alias:true } : {}), ...levels });
     if (resolved.startsWith('claude-') && !rows.has(resolved)) rows.set(resolved, { id:resolved, name:m.displayName || resolved, source:'Claude CLI', resolvedModel:resolved, ...levels });
   }
   return [...rows.values()].filter(m => VALID_ID.test(m.id));
