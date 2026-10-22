@@ -58,7 +58,10 @@ Never commit keys, provider credentials, prompts, response logs or build output.
 
 API-provider requests use native Chat Completions forwarding: preserve tools,
 message arrays, tool results, finish reasons and upstream usage in JSON and SSE.
-Clients execute API functions; never execute them in the bridge. CLI adapters normalize text arrays. Claude additionally maps response_format
+Clients execute API functions; never execute them in the bridge. Claude function
+calling is emulated through --json-schema (toolMode in src/providers.mjs): always
+buffered, always labelled with X-OpenBridge-Tools: emulated, never described as
+native. ChatGPT and Google stay 422 for tools. CLI adapters normalize text arrays. Claude additionally maps response_format
 json_schema to --json-schema and validates json_object responses. Buffer
 structured replies, never stream unstructured preamble. Other unsupported
 controls/functions return 422. The only options a CLI route may drop are the
@@ -71,12 +74,11 @@ main text at 14pt and secondary text at least 13pt. Bound notifications to the
 detail column and put full technical errors in selectable, copyable details;
 never allow an unbroken error or model ID to determine window width.
 
-Model discovery is explicit, never automatic inference. Claude uses the CLI
-initialize control response plus public models.dev metadata (no credentials);
-Codex uses its CLI catalogue; API providers use their own /models. Preserve
-existing enabled flags and names, add new IDs disabled, and expose source and
-alias resolution. Public/catalogue presence is not account access. CLI init
-model metadata is the source of served-model identity, not model self-report.
+Model discovery is explicit, never automatic inference. Claude uses only the CLI
+initialize control response (no third-party catalogue: it lists models the
+account may not reach); Codex uses its CLI catalogue; API providers use their own
+/models. Preserve existing enabled flags and names and add new IDs disabled. CLI
+init model metadata is the source of served-model identity, not model self-report.
 
 Provider pages apply changes at once: switches and pickers immediately, text
 fields on Return or focus loss. No Save button or bottom bar; the server

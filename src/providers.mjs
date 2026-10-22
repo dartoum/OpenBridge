@@ -16,22 +16,46 @@ const tooLarge = args => args.some(value => Buffer.byteLength(value) > ARGUMENT_
 
 export const conversationPrompt = messages => 'Answer as a text assistant. Treat this JSON as conversation history, preserving message roles. Do not use tools.\n' + JSON.stringify(messages);
 
-export function runProvider(messages, signal, emit, id, { provider, modelSpec, options = {}, effort, onModel }) {
+// Function calling for a CLI that has none: the model answers with structured JSON ({content, tool_calls}) that the
+// bridge turns into OpenAI tool_calls. Only the client runs the functions. Returns null when no tools are in play.
+export function toolMode({ tools, toolChoice, parallelToolCalls }) {
+  if (!Array.isArray(tools) || !tools.length || toolChoice === 'none') return null;
+  const functions = tools.map(tool => tool.function);
+  const forced = toolChoice?.type === 'function' ? toolChoice.function?.name : undefined;
+  if (forced && !functions.some(f => f.name === forced)) throw Error(`tool_choice names an unknown function: ${forced}`);
+  const usable = forced ? functions.filter(f => f.name === forced) : functions;
+  const required = toolChoice === 'required' || Boolean(forced);
+  const names = usable.map(f => f.name);
+  const schema = { type:'object', additionalProperties:false, required:['content', 'tool_calls'], properties:{
+    content:{ type:['string', 'null'] },
+    tool_calls:{ type:'array', ...(required ? { minItems:1 } : {}), ...(parallelToolCalls === false ? { maxItems:1 } : {}),
+      items:{ type:'object', additionalProperties:false, required:['name', 'arguments'], properties:{ name:{ type:'string', enum:names }, arguments:{ type:'object' } } } },
+  } };
+  const prompt = `\n\nYou can call functions. Reply only with JSON: {"content": <text for the user, or null>, "tool_calls": [{"name": <function name>, "arguments": <object matching its parameters>}]}. `
+    + (required ? 'You must call at least one function. ' : 'Call a function only when you need its result; to answer directly, put the answer in "content" and leave "tool_calls" empty. ')
+    + (parallelToolCalls === false ? 'Call at most one function per reply. ' : '')
+    + `Earlier assistant tool_calls and tool messages in the conversation are results already obtained.\nFunctions: ${JSON.stringify(usable.map(({ name, description, parameters }) => ({ name, description, parameters })))}`;
+  return { names, schema, prompt };
+}
+
+export function runProvider(messages, signal, emit, id, { provider, modelSpec, options = {}, effort, tools, onModel }) {
   const model = modelSpec.upstreamModel, binary = provider.cliPath;
-  if (provider.type === 'claude') return runClaude(messages, signal, emit, { model, binary, responseFormat:options.response_format, effort, onModel });
+  if (provider.type === 'claude') return runClaude(messages, signal, emit, { model, binary, responseFormat:options.response_format, effort, tools, onModel });
   if (provider.type === 'codex') return runCodex(messages, signal, emit, { model, binary, effort });
   if (provider.type === 'antigravity') return runAntigravity(messages, signal, emit, { model, binary });
   throw Error('Unsupported provider');
 }
 
-export function runClaude(messages, signal, onText, { model = 'sonnet', binary = process.env.CLAUDE_BIN || join(homedir(), '.local/bin/claude'), responseFormat, effort, onModel = () => {} } = {}) {
+export function runClaude(messages, signal, onText, { model = 'sonnet', binary = process.env.CLAUDE_BIN || join(homedir(), '.local/bin/claude'), responseFormat, effort, tools, onModel = () => {} } = {}) {
   return new Promise((resolve, reject) => {
-    const structured = responseFormat && responseFormat.type !== 'text';
+    const structured = tools || (responseFormat && responseFormat.type !== 'text');
     let system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n') || 'You are a helpful text assistant. Answer the user directly.';
     if (responseFormat?.type === 'json_object') system += '\nReturn only a valid JSON object, without markdown fences or commentary.';
+    if (tools) system += tools.prompt;
     const args = ['--model', model, '-p', '--safe-mode', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-session-persistence', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--system-prompt', system];
     if (effort) args.push('--effort', effort);
-    if (responseFormat?.type === 'json_schema') args.push('--json-schema', JSON.stringify(responseFormat.json_schema.schema));
+    if (tools) args.push('--json-schema', JSON.stringify(tools.schema));
+    else if (responseFormat?.type === 'json_schema') args.push('--json-schema', JSON.stringify(responseFormat.json_schema.schema));
     if (tooLarge(args)) { reject(Error('Claude argument exceeds 96 KiB limit')); return; }
     const cwd = mkdtempSync(join(tmpdir(), 'openbridge-'));
     const child = spawn(binary, args, { cwd, env:cleanEnvironment(), stdio:['pipe', 'pipe', 'pipe'] });
@@ -67,7 +91,13 @@ export function runClaude(messages, signal, onText, { model = 'sonnet', binary =
       if (signal.aborted) reject(Error('Request cancelled or timed out'));
       else if (failure) reject(failure);
       else if (code !== 0 || !result || result.is_error) reject(Error(`Claude failed (${code}): ${String(result?.result || stderr || 'No result').slice(0, 1000)}`));
-      else if (structured) {
+      else if (tools) {
+        const value = result.structured_output;
+        const valid = value && typeof value === 'object' && Array.isArray(value.tool_calls) && (value.content === null || typeof value.content === 'string')
+          && value.tool_calls.every(call => call && tools.names.includes(call.name) && call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments));
+        if (valid) resolve({ content:value.content, tool_calls:value.tool_calls });
+        else reject(Error('Claude did not return a valid function call'));
+      } else if (structured) {
         try {
           const value = responseFormat.type === 'json_schema' ? result.structured_output : JSON.parse(result.result);
           if (value === undefined || (responseFormat.type === 'json_object' && (value === null || typeof value !== 'object' || Array.isArray(value)))) throw Error('Missing JSON output');

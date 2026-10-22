@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { cleanEnvironment } from './providers.mjs';
 import { EFFORT_PATTERN } from './config.mjs';
-import { describeModel } from './model-families.mjs';
 
 const execute = promisify(execFile);
 const VALID_ID = /^[a-zA-Z0-9_.:/-]{1,180}$/;
@@ -71,35 +70,9 @@ export function claudeModelRows(models) {
   return [...rows.values()].filter(m => VALID_ID.test(m.id));
 }
 
-// The public catalogue says “Claude Haiku 5.5 (latest)”; the CLI says “Haiku 5.5”. Use one style.
-const publicName = (name, id) => (name || id).replace(/^Claude /, '').replace(/ \(latest\)$/, '');
-const versionKey = id => { const d = describeModel(id); return `${d.family}@${d.version.join('.')}`; };
-
-export async function discoverClaude(provider, signal, fetcher = fetch) {
-  const native = claudeModelRows(await claudeCatalogue(provider.cliPath, signal));
-  // Public metadata only: no account token, prompt or provider key is sent here.
-  const response = await fetcher('https://models.dev/api.json', { signal, redirect:'error' });
-  if (!response.ok) throw Error(`Public model catalogue HTTP ${response.status}; existing models were kept`);
-  const parts = [];
-  let size = 0;
-  for await (const part of response.body) {
-    size += part.length;
-    if (size > 20 * 1024 * 1024) throw Error('Public catalogue too large');
-    parts.push(part);
-  }
-  const data = JSON.parse(Buffer.concat(parts).toString('utf8'));
-  const rows = new Map(native.map(m => [m.id, m]));
-  const versions = new Set(native.filter(m => describeModel(m.id).version.length).map(m => versionKey(m.id)));
-  // One row per family version: the CLI entry wins, then the undated public ID over dated snapshots and `-latest` aliases.
-  const publicIDs = Object.keys(data.anthropic?.models || {}).filter(id => /^claude-[a-zA-Z0-9_.-]{1,150}$/.test(id) && !describeModel(id).latest);
-  publicIDs.sort((a, b) => a.length - b.length || a.localeCompare(b));
-  for (const id of publicIDs) {
-    const key = versionKey(id);
-    if (rows.has(id) || versions.has(key) || !describeModel(id).version.length) continue;
-    versions.add(key);
-    rows.set(id, { id, name:publicName(data.anthropic.models[id].name, id), source:'models.dev · public catalogue', resolvedModel:id });
-  }
-  return [...rows.values()].slice(0, 300);
+// Only what the Claude CLI itself reports: that is what this account's CLI can run. A CLI update refreshes the list.
+export async function discoverClaude(provider, signal) {
+  return claudeModelRows(await claudeCatalogue(provider.cliPath, signal)).slice(0, 300);
 }
 
 export async function discoverCodex(provider, signal) {

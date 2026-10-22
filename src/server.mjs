@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { runProvider } from './providers.mjs';
+import { runProvider, toolMode } from './providers.mjs';
 import { loadConfig, validateConfig, saveConfig, catalog, availableModels, resolveConfiguredModel, EFFORT_PATTERN } from './config.mjs';
 import { diagnostics, discoverModels } from './diagnostics.mjs';
 
@@ -42,8 +42,15 @@ export function validate(body) {
 function checkCliOptions(provider, body) {
   const allowed = new Set([...CLI_OPTIONS, ...IGNORED_ON_CLI]);
   if (provider.type === 'claude' || body.response_format?.type === 'text') allowed.add('response_format');
+  // Claude can emulate function calling (see toolMode); the other CLIs cannot.
+  const emulated = provider.type === 'claude' && body.tools?.length > 0;
+  if (emulated) {
+    allowed.add('parallel_tool_calls');
+    if (!body.tools.every(tool => tool?.type === 'function' && /^[a-zA-Z0-9_-]{1,64}$/.test(tool.function?.name))) throw httpError(422, 'Only function tools with a simple name are supported');
+    if (body.response_format && body.response_format.type !== 'text') throw httpError(422, 'response_format cannot be combined with tools on a CLI route');
+  }
   const unsupported = Object.keys(body).filter(k => !allowed.has(k));
-  const functions = body.tools?.length || (body.tool_choice && body.tool_choice !== 'none') || body.messages.some(m => m.role === 'tool' || m.tool_calls);
+  const functions = !emulated && (body.tools?.length || (body.tool_choice && body.tool_choice !== 'none') || body.messages.some(m => m.role === 'tool' || m.tool_calls));
   if (unsupported.length || functions) throw httpError(422, `${provider.name} CLI does not support these options: ${unsupported.join(', ') || 'function calling'}. Use an OpenAI-compatible API provider for these features.`);
   return IGNORED_ON_CLI.filter(name => body[name] !== undefined);
 }
@@ -176,13 +183,19 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
     // Snapshot provider and model so configuration changes only affect future requests.
     const provider = structuredClone(config.providers.find(p => p.id === selected.providerID));
     const spec = structuredClone(selected);
-    let effort = body.reasoning_effort;
+    let effort = body.reasoning_effort, tools = null;
     const extraHeaders = {};
     if (provider.type !== 'openai') {
       const ignored = checkCliOptions(provider, body);
       if (ignored.length) extraHeaders['X-OpenBridge-Ignored'] = ignored.join(',');
       effort = cliEffort(spec, body.reasoning_effort);
-      body.messages = body.messages.map(m => ({ role:m.role === 'developer' ? 'system' : m.role, content:Array.isArray(m.content) ? m.content.map(p => p.text).join('') : m.content }));
+      if (provider.type === 'claude') {
+        try { tools = toolMode({ tools:body.tools, toolChoice:body.tool_choice, parallelToolCalls:body.parallel_tool_calls }); }
+        catch (e) { throw httpError(422, e.message); }
+        if (tools) extraHeaders['X-OpenBridge-Tools'] = 'emulated';
+      }
+      body.messages = body.messages.map(m => ({ role:m.role === 'developer' ? 'system' : m.role, content:Array.isArray(m.content) ? m.content.map(p => p.text).join('') : m.content,
+        ...(m.tool_calls ? { tool_calls:m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id:m.tool_call_id } : {}) }));
     }
 
     active = true; activeModel = spec.id; stats.requests++;
@@ -209,8 +222,19 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
           if (!body.stream || res.destroyed) return;
           if (!streaming) { res.writeHead(200, { 'Content-Type':'text/event-stream', 'Cache-Control':'no-cache', ...extraHeaders }); streaming = true; chunk({ role:'assistant' }); }
           chunk({ content:delta });
-        }, spec.id, { provider, modelSpec:spec, options:body, effort, onModel:value => { resolvedModel = value; } });
-        if (body.stream) {
+        }, spec.id, { provider, modelSpec:spec, options:body, effort, tools, onModel:value => { resolvedModel = value; } });
+        if (result && typeof result === 'object') {
+          // Emulated function calling: the answer is buffered, so tool calls arrive whole.
+          const calls = result.tool_calls.map(call => ({ id:`call_${randomUUID().replaceAll('-', '').slice(0, 24)}`, type:'function', function:{ name:call.name, arguments:JSON.stringify(call.arguments) } }));
+          const finish = calls.length ? 'tool_calls' : 'stop';
+          if (body.stream) {
+            res.writeHead(200, { 'Content-Type':'text/event-stream', 'Cache-Control':'no-cache', ...extraHeaders });
+            chunk({ role:'assistant', ...(result.content ? { content:result.content } : {}) });
+            if (calls.length) chunk({ tool_calls:calls.map((call, index) => ({ index, ...call })) });
+            chunk({}, finish);
+            res.end('data: [DONE]\n\n');
+          } else sendJSON(res, 200, { id, object:'chat.completion', created, model:spec.id, choices:[{ index:0, message:{ role:'assistant', content:result.content ?? null, ...(calls.length ? { tool_calls:calls } : {}) }, finish_reason:finish }] }, extraHeaders);
+        } else if (body.stream) {
           if (!streaming) { res.writeHead(200, { 'Content-Type':'text/event-stream', ...extraHeaders }); chunk({ role:'assistant', content:result }); }
           chunk({}, 'stop');
           res.end('data: [DONE]\n\n');

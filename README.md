@@ -128,9 +128,18 @@ CLI providers accept plain text and arrays of text parts. Claude also accepts
 `response_format` with `text`, `json_object` or `json_schema`. JSON Schema uses
 the CLI’s `--json-schema` and `structured_output`; JSON-object mode checks the
 complete reply before delivery. Structured replies are buffered, including SSE.
-CLI providers do not support function calling in this adapter, nor `n` or other
-options that would change the result: these return HTTP 422 with the provider and
-the unsupported options. Length and sampling options (`max_tokens`,
+**Function calling on Claude is emulated.** With `tools` (and `tool_choice`,
+`parallel_tool_calls`, tool messages) the bridge gives Claude the function list,
+asks for a fixed JSON answer through `--json-schema`, and turns it into standard
+`tool_calls` with `finish_reason: tool_calls`. Your client runs the functions and
+sends the results back, as with an API provider; the bridge never executes them.
+Replies are buffered, so calls arrive whole in SSE rather than as argument
+fragments, and the response carries `X-OpenBridge-Tools: emulated`. It is a
+benchmark of the model following the JSON agreement, not native tool use, so
+quality and reliability can be lower than an API provider. `response_format`
+cannot be combined with tools. ChatGPT and Google do not support function calling
+here: they, and `n` or other options that would change the result, return HTTP 422
+with the provider and the unsupported options. Length and sampling options (`max_tokens`,
 `max_completion_tokens`, `temperature`, `top_p`, penalties, `stop`, `seed`, `user`,
 `stream_options`) cannot be applied by a CLI: they are ignored, and the response
 carries `X-OpenBridge-Ignored` naming them, so a client can notice. The token
@@ -187,20 +196,19 @@ truncated stream. This is local protocol evidence, not a live GOAT/OpenCode run.
 
 ## Catalogue sources and model identity
 
-Claude Fetch models initializes the official CLI without sending a user prompt.
-It combines the CLI catalogue and resolved aliases with public Anthropic entries
-from models.dev. Public entries are labelled **public catalogue**. Account access is unverified
-until a successful request; catalogue entries are not subscription entitlements. Codex Fetch models uses `codex debug models`;
-API providers query their configured /models, and Google uses `agy models`.
-No API-provider key or account token is sent to models.dev. Fetch errors retain
-existing configuration. Existing names/enabled flags survive refresh; new entries
-start disabled. Save toggle changes before refreshing. Search by name or ID.
+Claude Fetch models initializes the official CLI without sending a user prompt
+and lists exactly what the CLI reports. No third-party catalogue is consulted, so
+a model the installed CLI does not know yet appears after **Update CLI…**.
+Codex Fetch models uses `codex debug models`; API providers query their
+configured /models, and Google uses `agy models`. Fetch errors retain existing
+configuration. Existing names/enabled flags survive refresh; new entries start
+disabled. Search by name or ID.
 
-On this Mac, Claude 2.1.286’s catalogue resolves `haiku` to
-`claude-haiku-4-5-20251001`. A separate real CLI smoke using explicit
-`claude-haiku-5-5` and a JSON schema succeeded and its init metadata identified
-Haiku 5.5. Successful CLI checks now show the served-model metadata. This is
-machine/account-specific evidence, not a claim about every subscription.
+On this Mac, Claude 2.1.286 reports `haiku` as `claude-haiku-4-5-20251001` and does
+not list Haiku 5.5, although an earlier real request with the explicit ID
+`claude-haiku-5-5` worked. That model stays enabled and usable until you switch it
+off; it is not offered again by a fetch. This is machine/account-specific evidence,
+not a claim about every subscription.
 
 ## CLI updates
 

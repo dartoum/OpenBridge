@@ -195,7 +195,8 @@ struct Overview: View {
                 LabeledContent("Base URL") { Text(app.endpoint + "/v1").textSelection(.enabled); CopyButton(title: "Copy") { app.copyURL() } }
                 LabeledContent("API key") { Text("Local bridge key").foregroundStyle(.secondary); CopyButton(title: "Copy") { app.copyKey() }.disabled(app.bridgeKey == nil) }
                 LabeledContent("All settings") { CopyButton(title: "Copy connection settings") { app.copyConfig() }.disabled(app.snapshot == nil) }
-                Text("For apps on this Mac. Subscription (CLI) models answer plain text; requests that use function calling, token limits or sampling options get an error. Claude adds JSON output and thinking levels. Use an API provider for apps that need those.").font(secondaryFont).foregroundStyle(.secondary)
+Text("For apps on this Mac. Claude supports function calling (emulated), JSON output and thinking levels. ChatGPT and Google answer plain text only. Length and sampling options such as max_tokens are ignored on subscription models. For real function calling, use an API provider.").font(secondaryFont).foregroundStyle(.secondary)
+
             }
             Section("Installation") {
                 LabeledContent("Node.js", value: app.snapshot?.runtime.version ?? (FileManager.default.isExecutableFile(atPath: app.node) ? "Bundled" : "Missing"))
@@ -418,7 +419,6 @@ struct ModelRow: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(displayName(model, in: provider)).lineLimit(2)
-                if model.source?.hasPrefix("models.dev") == true { Text("Not confirmed for your account").font(secondaryFont).foregroundStyle(.secondary) }
                 status
             }.frame(width: 190, alignment: .leading)
             // The ID is a column, so every row lines up and can be scanned or copied.

@@ -46,6 +46,19 @@
   sheet was built but not exercised against a real endpoint.
 - Bionic's settings page was not consulted: access to that app was declined.
 
+## Fourth round
+
+- Claude discovery now lists only what the CLI reports; the models.dev lookup,
+  its labels and its name normalisation are gone. Claude 2.1.286 reports twelve
+  entries and no Haiku 5.5. The existing enabled Haiku 5.5 entry is untouched.
+- Claude function calling is emulated through `--json-schema` and returned as
+  OpenAI `tool_calls` (JSON and SSE), covered by fixtures and an HTTP test.
+- Two small real requests through `claude/sonnet` (low effort): the first returned a
+  `get_weather` call for Amsterdam with `finish_reason: tool_calls` and the headers
+  `X-OpenBridge-Tools: emulated` and `X-OpenBridge-Ignored: max_tokens`; the second,
+  carrying the tool result, returned a plain answer with `finish_reason: stop`.
+  SSE and forced `tool_choice` were only exercised against fixtures.
+
 ## Not verified
 
 - No screenshots: the screenshot tools could not capture this menu bar app, so

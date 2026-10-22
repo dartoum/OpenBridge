@@ -18,12 +18,12 @@ if(args.includes('--input-format')){
  });}
 `,{mode:0o700});return binary;
 }
-test('Claude discovery uses initialization only, exposes aliases and public version IDs',async t=>{
+test('Claude discovery uses initialization only and exposes aliases with their resolved versions',async t=>{
  const binary=fixture(t);const native=await claudeCatalogue(binary,AbortSignal.timeout(5000));
  assert.equal(claudeModelRows(native).find(m=>m.id==='haiku').resolvedModel,'claude-haiku-4-5');
- const models=await discoverClaude({cliPath:binary},AbortSignal.timeout(5000),async()=>new Response(JSON.stringify({anthropic:{models:{'claude-haiku-5-5':{name:'Claude Haiku 5.5'}}}})));
- assert.equal(models.find(m=>m.id==='claude-haiku-5-5').source,'models.dev · public catalogue');
- assert.equal(models.find(m=>m.id==='claude-haiku-4-5').source,'Claude CLI');
+ const models=await discoverClaude({cliPath:binary},AbortSignal.timeout(5000));
+ assert.deepEqual(models.map(m=>m.id),['haiku','claude-haiku-4-5']);
+ assert.equal(models.every(m=>m.source==='Claude CLI'),true);
 });
 test('Claude JSON schema/object output suppresses unstructured deltas and reports actual model',async t=>{
  const binary=fixture(t);
