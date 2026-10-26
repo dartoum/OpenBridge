@@ -7,7 +7,7 @@ import { runProvider, toolMode } from './providers.mjs';
 import { loadConfig, validateConfig, saveConfig, catalog, availableModels, resolveConfiguredModel, EFFORT_PATTERN } from './config.mjs';
 import { discoverModels } from './model-discovery.mjs';
 
-const httpError = (status, message) => Object.assign(Error(message), { status });
+const httpError = (status, message, headers) => Object.assign(Error(message), { status, headers });
 const CLI_OPTIONS = ['model', 'messages', 'stream', 'tools', 'tool_choice', 'reasoning_effort'];
 // Harmless length/sampling controls a CLI cannot take: dropped, and named in X-OpenBridge-Ignored on the response.
 const IGNORED_ON_CLI = ['max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'frequency_penalty', 'presence_penalty', 'stop', 'seed', 'user', 'stream_options'];
@@ -81,7 +81,7 @@ function sendJSON(res, status, value, headers = {}) {
   res.writeHead(status, { 'Content-Type':'application/json', ...headers });
   res.end(JSON.stringify(value));
 }
-const sendError = (res, status, message) => sendJSON(res, status, { error:{ message, type:'bridge_error' } });
+const sendError = (res, status, message, headers) => sendJSON(res, status, { error:{ message, type:'bridge_error' } }, headers);
 
 // Native Chat Completions forwarding: the upstream receives the client request with only the model ID replaced.
 async function forwardChat({ provider, spec, body, apiKey, signal, res, event }) {
@@ -121,11 +121,28 @@ async function forwardChat({ provider, spec, body, apiKey, signal, res, event })
   res.end();
 }
 
-export function createBridge({ key, adminKey = key, runner = runProvider, timeout = 120000, model, configPath, config:suppliedConfig } = {}) {
+export function createBridge({ key, adminKey = key, runner = runProvider, timeout = 120000, queueTimeout = 30000, model, configPath, config:suppliedConfig } = {}) {
   if (!key || !adminKey) throw Error('Bridge and management keys required');
   let config = validateConfig(structuredClone(suppliedConfig || loadConfig(configPath)));
   if (model) config.selectedModel = resolveConfiguredModel(config, model)?.id || config.selectedModel;
   let maintenance = false, active = false, activeModel = null, currentController, checks = {};
+  // One request runs at a time. Others wait their turn (up to queueTimeout) instead of failing at once: agent clients
+  // often send a title request next to the main one. `active` stays true while the slot is handed over.
+  const waiting = [];
+  const release = () => { const next = waiting.shift(); if (next) next(); else active = false; };
+  const acquire = (res) => {
+    if (!active) { active = true; return Promise.resolve(); }
+    return new Promise((resolve, reject) => {
+      const turn = () => { clearTimeout(timer); res.off('close', leave); resolve(); };
+      const leave = () => { clearTimeout(timer); const i = waiting.indexOf(turn); if (i >= 0) waiting.splice(i, 1); reject(httpError(499, 'Client closed the request')); };
+      const timer = setTimeout(() => {
+        waiting.splice(waiting.indexOf(turn), 1); res.off('close', leave);
+        reject(httpError(429, 'Bridge busy; retry after the current request', { 'Retry-After':String(Math.ceil((timeout + 1000) / 1000)) }));
+      }, queueTimeout);
+      waiting.push(turn);
+      res.once('close', leave);
+    });
+  };
   const secrets = {};
   if (process.env.COMMAND_CODE_API_KEY) secrets.commandcode = process.env.COMMAND_CODE_API_KEY;
   const stats = { startedAt:new Date().toISOString(), requests:0, succeeded:0, failed:0, lastDurationMs:null };
@@ -175,34 +192,36 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
   };
 
   async function chat(req, res) {
-    const available = () => {
-      if (maintenance) throw httpError(503, 'CLI maintenance in progress; retry when it finishes');
-      if (active) throw httpError(429, 'Bridge busy; retry after the current request');
-    };
-    available();
+    const unavailable = () => { if (maintenance) throw httpError(503, 'CLI maintenance in progress; retry when it finishes'); };
+    unavailable();
     const body = validate(await readJSON(req));
-    available();
-    const selected = resolveConfiguredModel(config, body.model);
-    if (!selected) throw httpError(400, 'Model unknown or disabled');
-    // Snapshot provider and model so configuration changes only affect future requests.
-    const provider = structuredClone(config.providers.find(p => p.id === selected.providerID));
-    const spec = structuredClone(selected);
-    let effort = body.reasoning_effort, tools = null;
+    unavailable();
+    await acquire(res);
+    let spec, provider, effort, tools = null;
     const extraHeaders = {};
-    if (provider.type !== 'openai') {
-      const ignored = checkCliOptions(provider, body);
-      if (ignored.length) extraHeaders['X-OpenBridge-Ignored'] = ignored.join(',');
-      effort = cliEffort(spec, body.reasoning_effort);
-      if (provider.type === 'claude' || provider.type === 'antigravity') {
-        try { tools = toolMode({ tools:body.tools, toolChoice:body.tool_choice, parallelToolCalls:body.parallel_tool_calls }); }
-        catch (e) { throw httpError(422, e.message); }
-        if (tools) extraHeaders['X-OpenBridge-Tools'] = 'emulated';
+    try {
+      unavailable();
+      const selected = resolveConfiguredModel(config, body.model);
+      if (!selected) throw httpError(400, 'Model unknown or disabled');
+      // Snapshot provider and model so configuration changes only affect future requests.
+      provider = structuredClone(config.providers.find(p => p.id === selected.providerID));
+      spec = structuredClone(selected);
+      effort = body.reasoning_effort;
+      if (provider.type !== 'openai') {
+        const ignored = checkCliOptions(provider, body);
+        if (ignored.length) extraHeaders['X-OpenBridge-Ignored'] = ignored.join(',');
+        effort = cliEffort(spec, body.reasoning_effort);
+        if (provider.type === 'claude' || provider.type === 'antigravity') {
+          try { tools = toolMode({ tools:body.tools, toolChoice:body.tool_choice, parallelToolCalls:body.parallel_tool_calls }); }
+          catch (e) { throw httpError(422, e.message); }
+          if (tools) extraHeaders['X-OpenBridge-Tools'] = 'emulated';
+        }
+        body.messages = body.messages.map(m => ({ role:m.role === 'developer' ? 'system' : m.role, content:Array.isArray(m.content) ? m.content.map(p => p.text).join('') : m.content,
+          ...(m.tool_calls ? { tool_calls:m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id:m.tool_call_id } : {}) }));
       }
-      body.messages = body.messages.map(m => ({ role:m.role === 'developer' ? 'system' : m.role, content:Array.isArray(m.content) ? m.content.map(p => p.text).join('') : m.content,
-        ...(m.tool_calls ? { tool_calls:m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id:m.tool_call_id } : {}) }));
-    }
+    } catch (e) { release(); throw e; }
 
-    active = true; activeModel = spec.id; stats.requests++;
+    activeModel = spec.id; stats.requests++;
     const started = Date.now(), controller = new AbortController();
     currentController = controller;
     const timer = setTimeout(() => controller.abort(), timeout);
@@ -253,8 +272,9 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
       else sendError(res, controller.signal.aborted ? 504 : 502, e.message);
     } finally {
       clearTimeout(timer);
-      active = false; activeModel = null; currentController = undefined;
+      activeModel = null; currentController = undefined;
       stats.lastDurationMs = Date.now() - started;
+      release();
     }
   }
 
@@ -268,7 +288,7 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
       if (route) return sendJSON(res, 200, await route(req));
       if (req.method === 'POST' && req.url === '/v1/chat/completions') return await chat(req, res);
       sendError(res, 404, 'Not found');
-    } catch (e) { sendError(res, e.status || 400, e.message); }
+    } catch (e) { sendError(res, e.status || 400, e.message, e.headers); }
   });
   server.cancelActive = () => currentController?.abort();
   return server;

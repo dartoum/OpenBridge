@@ -155,8 +155,8 @@ with the provider and the unsupported options. Length and sampling options (`max
 carries `X-OpenBridge-Ignored` naming them, so a client can notice. The token
 limit therefore does not apply on CLI routes.
 Images, embeddings and Responses API are not implemented. Browser origins are
-blocked; call from a backend on this Mac. One request at a time (429 while busy),
-120-second timeout and cancellation. No invented token counts or quota estimates.
+blocked; call from a backend on this Mac. One request at a time: others wait up to 30 seconds
+for their turn, then get 429 with Retry-After. 120-second timeout and cancellation. No invented token counts or quota estimates.
 
 The app uses English labels and diagnostics, 14-point main text and 13-point
 secondary text. Results appear next to the control that caused them (a model's

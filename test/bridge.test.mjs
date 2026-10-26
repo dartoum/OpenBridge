@@ -41,7 +41,7 @@ test('authenticated API, validation, streaming and upstream errors', async t => 
 test('cancellation and concurrent request limit', async t => {
   let started;
   const ready = new Promise(r => { started = r; });
-  const server = createBridge({ key: 'test', timeout: 150, runner: async (m, signal) => {
+  const server = createBridge({ key: 'test', timeout: 150, queueTimeout: 0, runner: async (m, signal) => {
     started(); await new Promise((r, reject) => signal.addEventListener('abort', () => reject(Error('timeout')), { once: true }));
   } });
   await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
@@ -166,4 +166,28 @@ test('Antigravity refuses response_format json_schema but accepts json_object', 
   assert.equal(refused.status, 422);
   assert.match((await refused.json()).error.message, /json_object/);
   assert.equal((await post({ type: 'json_object' })).status, 200);
+});
+
+test('a second request waits for its turn, and gets 429 with Retry-After only after the wait limit', async t => {
+  const order = []; let release; const gate = new Promise(r => { release = r; });
+  const server = createBridge({ key: 'test', queueTimeout: 400, runner: async messages => { order.push(messages[0].content); if (messages[0].content === 'first') await gate; return messages[0].content; } });
+  await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const post = content => fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, { method: 'POST', headers: { Authorization: 'Bearer test' }, body: JSON.stringify({ model: 'claude-subscription', messages: [{ role: 'user', content }] }) });
+  const first = post('first');
+  while (!order.length) await new Promise(r => setTimeout(r, 5));
+  const second = post('second');
+  await new Promise(r => setTimeout(r, 50));
+  assert.deepEqual(order, ['first']);
+  release();
+  assert.equal((await (await second).json()).choices[0].message.content, 'second');
+  assert.equal((await first).status, 200);
+  // Now hold the slot longer than the wait limit.
+  const slow = createBridge({ key: 'test', queueTimeout: 100, timeout: 1000, runner: (m, signal) => new Promise((r, reject) => signal.addEventListener('abort', () => reject(Error('aborted')), { once: true })) });
+  await new Promise(r => slow.listen(0, '127.0.0.1', r)); t.after(() => slow.close());
+  const post2 = () => fetch(`http://127.0.0.1:${slow.address().port}/v1/chat/completions`, { method: 'POST', headers: { Authorization: 'Bearer test' }, body: JSON.stringify({ model: 'claude-subscription', messages: [{ role: 'user', content: 'x' }] }) });
+  post2().catch(() => {});
+  await new Promise(r => setTimeout(r, 50));
+  const refused = await post2();
+  assert.equal(refused.status, 429);
+  assert.ok(Number(refused.headers.get('retry-after')) >= 1);
 });
