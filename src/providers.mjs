@@ -42,7 +42,7 @@ export function runProvider(messages, signal, emit, id, { provider, modelSpec, o
   const model = modelSpec.upstreamModel, binary = provider.cliPath;
   if (provider.type === 'claude') return runClaude(messages, signal, emit, { model, binary, responseFormat:options.response_format, effort, tools, onModel });
   if (provider.type === 'codex') return runCodex(messages, signal, emit, { model, binary, effort });
-  if (provider.type === 'antigravity') return runAntigravity(messages, signal, emit, { model, binary });
+  if (provider.type === 'antigravity') return runAntigravity(messages, signal, emit, { model, binary, responseFormat:options.response_format, effort, tools, onModel });
   throw Error('Unsupported provider');
 }
 
@@ -177,10 +177,10 @@ export function runCodex(messages, signal, emit, { model = 'default', binary = p
 }
 
 export function parseAntigravity(event) {
-  if (event.event === 'init' && (!Array.isArray(event.init?.tools) || event.init.tools.length)) return { error:'Antigravity exposed tools despite text-only agent configuration' };
   if (event.event === 'step_update') {
     const step = event.step_update || {};
-    if (['tool_call', 'tool', 'command', 'mcp_tool'].includes(step.step_type)) return { error:'Antigravity attempted a tool action' };
+    // Allowlist, not denylist: a step type this adapter does not know is refused rather than assumed harmless.
+    if (!['agent_response', 'plan'].includes(step.step_type)) return { error:'Antigravity attempted a tool action' };
     return { text:step.step_type === 'agent_response' ? step.text_delta || '' : '' };
   }
   if (event.event === 'result') {
@@ -190,12 +190,67 @@ export function parseAntigravity(event) {
   return {};
 }
 
-export function runAntigravity(messages, signal, emit, { model, binary = process.env.AGY_BIN || join(homedir(), '.local/bin/agy') } = {}) {
-  return runEvents({ binary, args:['-p', conversationPrompt(messages), '--output-format', 'stream-json', '--model', model, '--agent', 'openbridge-text', '--disable-slash-commands', '--sandbox', '--print-timeout', '110s'], messages, signal, emit, parse:parseAntigravity,
-    ignoreStdin:true,
-    prepare(cwd) {
-      mkdirSync(join(cwd, '.agents/agents'), { recursive:true });
-      writeFileSync(join(cwd, '.agents/agents/openbridge-text.md'), '---\nname: openbridge-text\ndescription: Plain text completion without tools\ntools: []\nmainAgent: true\nsubagent: false\nmcpServers: []\nskills: []\nplugins: []\ncommandExecutionPolicy: off\n---\nAnswer the supplied conversation directly. Do not use tools, skills or other agents.\n');
+function cleanMarkdownFences(text) {
+  const trimmed = text.trim();
+  if (trimmed.startsWith('```')) {
+    const firstNewline = trimmed.indexOf('\n');
+    if (firstNewline !== -1 && trimmed.endsWith('```')) {
+      return trimmed.slice(firstNewline + 1, -3).trim();
+    }
+  }
+  return trimmed;
+}
+
+export async function runAntigravity(messages, signal, emit, { model, binary = process.env.AGY_BIN || join(homedir(), '.local/bin/agy'), responseFormat, effort, tools, onModel = () => {} } = {}) {
+  const structured = tools || (responseFormat && responseFormat.type !== 'text');
+  const args = ['--output-format', 'stream-json', '--disable-slash-commands', '--sandbox', '--print-timeout', '110s'];
+  if (model) args.push('--model', model);
+  if (effort) args.push('--effort', effort);
+  if (tools) args.push('--json-schema', JSON.stringify(tools.schema));
+  else if (responseFormat?.type === 'json_schema') args.push('--json-schema', JSON.stringify(responseFormat.json_schema.schema));
+
+  let prompt = conversationPrompt(messages);
+  if (tools) prompt += tools.prompt;
+  else if (responseFormat?.type === 'json_object') prompt += '\nReturn only a valid JSON object, without markdown fences or commentary.';
+
+  args.unshift('-p', prompt);
+
+  const rawResult = await runEvents({
+    binary,
+    args,
+    messages,
+    signal,
+    emit: delta => { if (!structured) emit(delta); },
+    parse: event => {
+      if (event.event === 'init' && Array.isArray(event.init?.models) && event.init.models[0]?.model) {
+        onModel(event.init.models[0].model);
+      }
+      return parseAntigravity(event);
     },
+    ignoreStdin: true,
   });
+
+  if (tools) {
+    let parsed;
+    try { parsed = JSON.parse(cleanMarkdownFences(rawResult)); }
+    catch { throw Error('Antigravity did not return valid JSON for tool call'); }
+    const valid = parsed && typeof parsed === 'object' && Array.isArray(parsed.tool_calls) && (parsed.content === null || typeof parsed.content === 'string')
+      && parsed.tool_calls.every(call => call && tools.names.includes(call.name) && call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments));
+    if (valid) return { content:parsed.content, tool_calls:parsed.tool_calls };
+    throw Error('Antigravity did not return a valid function call');
+  }
+
+  if (structured) {
+    try {
+      const parsed = JSON.parse(cleanMarkdownFences(rawResult));
+      if (parsed === undefined || (responseFormat.type === 'json_object' && (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)))) throw Error('Missing JSON output');
+      const output = JSON.stringify(parsed);
+      emit(output);
+      return output;
+    } catch {
+      throw Error('Antigravity did not return valid structured output');
+    }
+  }
+
+  return rawResult;
 }

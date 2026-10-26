@@ -64,11 +64,11 @@ Never commit keys, provider credentials, prompts, response logs or build output.
 
 API-provider requests use native Chat Completions forwarding: preserve tools,
 message arrays, tool results, finish reasons and upstream usage in JSON and SSE.
-Clients execute API functions; never execute them in the bridge. Claude function
-calling is emulated through --json-schema (toolMode in src/providers.mjs): always
+Clients execute API functions; never execute them in the bridge. Function
+calling on CLI adapters (Claude and Antigravity) is emulated through --json-schema (toolMode in src/providers.mjs): always
 buffered, always labelled with X-OpenBridge-Tools: emulated, never described as
-native. ChatGPT and Google stay 422 for tools. CLI adapters normalize text arrays. Claude additionally maps response_format
-json_schema to --json-schema and validates json_object responses. Buffer
+native. ChatGPT stays 422 for tools. CLI adapters normalize text arrays. Claude and Antigravity additionally map response_format
+json_schema to --json-schema and validate json_object responses. Buffer
 structured replies, never stream unstructured preamble. Other unsupported
 controls/functions return 422. The only options a CLI route may drop are the
 harmless length/sampling ones (`IGNORED_ON_CLI` in src/server.mjs), and then

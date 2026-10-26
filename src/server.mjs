@@ -41,9 +41,10 @@ export function validate(body) {
 // the result, such as function calling, is refused rather than dropped. Returns the ignored option names.
 function checkCliOptions(provider, body) {
   const allowed = new Set([...CLI_OPTIONS, ...IGNORED_ON_CLI]);
-  if (provider.type === 'claude' || body.response_format?.type === 'text') allowed.add('response_format');
-  // Claude can emulate function calling (see toolMode); the other CLIs cannot.
-  const emulated = provider.type === 'claude' && body.tools?.length > 0;
+  const supportsStructured = provider.type === 'claude' || provider.type === 'antigravity';
+  if (supportsStructured || body.response_format?.type === 'text') allowed.add('response_format');
+  // Claude and Antigravity can emulate function calling (see toolMode); Codex cannot.
+  const emulated = supportsStructured && body.tools?.length > 0;
   if (emulated) {
     allowed.add('parallel_tool_calls');
     if (!body.tools.every(tool => tool?.type === 'function' && /^[a-zA-Z0-9_-]{1,64}$/.test(tool.function?.name))) throw httpError(422, 'Only function tools with a simple name are supported');
@@ -190,7 +191,7 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
       const ignored = checkCliOptions(provider, body);
       if (ignored.length) extraHeaders['X-OpenBridge-Ignored'] = ignored.join(',');
       effort = cliEffort(spec, body.reasoning_effort);
-      if (provider.type === 'claude') {
+      if (provider.type === 'claude' || provider.type === 'antigravity') {
         try { tools = toolMode({ tools:body.tools, toolChoice:body.tool_choice, parallelToolCalls:body.parallel_tool_calls }); }
         catch (e) { throw httpError(422, e.message); }
         if (tools) extraHeaders['X-OpenBridge-Tools'] = 'emulated';

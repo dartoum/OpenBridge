@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {defaultConfig, resolveConfiguredModel} from '../src/config.mjs';
-import { parseCodex, parseAntigravity, codexArgs, runEvents, cleanEnvironment } from '../src/providers.mjs';
+import { parseCodex, parseAntigravity, codexArgs, runEvents, cleanEnvironment, runAntigravity, toolMode } from '../src/providers.mjs';
 
 test('concrete model IDs are fixed while subscription follows the menu', () => {
   const config=defaultConfig();config.selectedModel='chatgpt/default';
@@ -32,9 +32,12 @@ test('every CLI route strips API keys and provider switches from the environment
   for(const name of names) assert.equal(env[name],undefined);
   assert.equal(env.PATH,process.env.PATH);
 });
-test('Antigravity fails closed when the CLI exposes tools or reports a failure', () => {
-  assert.ok(parseAntigravity({event:'init',init:{tools:['run_command']}}).error);
-  assert.equal(parseAntigravity({event:'init',init:{tools:[]}}).error,undefined);
+test('Antigravity fails closed when the CLI attempts a tool action or reports a failure', () => {
+  assert.ok(parseAntigravity({event:'step_update',step_update:{step_type:'tool_call'}}).error);
+  assert.ok(parseAntigravity({event:'step_update',step_update:{step_type:'command'}}).error);
+  assert.ok(parseAntigravity({event:'step_update',step_update:{step_type:'file_write'}}).error);
+  assert.ok(parseAntigravity({event:'step_update',step_update:{}}).error);
+  assert.equal(parseAntigravity({event:'step_update',step_update:{step_type:'plan'}}).error,undefined);
   assert.equal(parseAntigravity({event:'step_update',step_update:{step_type:'agent_response',text_delta:'hello'}}).text,'hello');
   assert.equal(parseAntigravity({event:'result',result:{status:'SUCCESS',response:'hello'}}).done,true);
   assert.ok(parseAntigravity({event:'result',result:{status:'ERROR',error:'quota'}}).error);
@@ -42,6 +45,30 @@ test('Antigravity fails closed when the CLI exposes tools or reports a failure',
 test('CLI adapter preserves the original isolation failure over shutdown events', async t => {
   const dir=mkdtempSync(join(tmpdir(),'openbridge-events-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
   const file=join(dir,'fixture.mjs');
-  writeFileSync(file, `process.on('SIGTERM',()=>{console.log(JSON.stringify({event:'result',result:{status:'INTERRUPTED',error:'interrupted'}}));process.exit(0);});console.log(JSON.stringify({event:'init',init:{tools:['run_command']}}));setInterval(()=>{},1000);`);
-  await assert.rejects(runEvents({binary:process.execPath,args:[file],messages:[],signal:AbortSignal.timeout(5000),emit:()=>{},parse:parseAntigravity,ignoreStdin:true}),/exposed tools/);
+  writeFileSync(file, `process.on('SIGTERM',()=>{console.log(JSON.stringify({event:'result',result:{status:'INTERRUPTED',error:'interrupted'}}));process.exit(0);});console.log(JSON.stringify({event:'step_update',step_update:{step_type:'tool_call'}}));setInterval(()=>{},1000);`);
+  await assert.rejects(runEvents({binary:process.execPath,args:[file],messages:[],signal:AbortSignal.timeout(5000),emit:()=>{},parse:parseAntigravity,ignoreStdin:true}),/attempted a tool action/);
+});
+
+function fakeAgy(t, response) {
+  const dir=mkdtempSync(join(tmpdir(),'openbridge-agy-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const file=join(dir,'agy');
+  writeFileSync(file,`#!/usr/bin/env node\nconsole.log(JSON.stringify({event:'init',init:{models:[{model:'fixture-model'}]}}));console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',response:${JSON.stringify(response)}}}));\n`);
+  chmodSync(file,0o755);
+  return file;
+}
+const signal=()=>AbortSignal.timeout(5000);
+test('Antigravity emulates function calling and unwraps a fenced JSON reply', async t => {
+  const tools=toolMode({tools:[{type:'function',function:{name:'lookup',parameters:{type:'object'}}}]});
+  let model;
+  const result=await runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgy(t,'```json\n{"content":null,"tool_calls":[{"name":"lookup","arguments":{"q":"x"}}]}\n```'),tools,onModel:m=>{model=m;}});
+  assert.deepEqual(result,{content:null,tool_calls:[{name:'lookup',arguments:{q:'x'}}]});
+  assert.equal(model,'fixture-model');
+});
+test('Antigravity rejects tool calls to unknown functions and non-object structured output', async t => {
+  const tools=toolMode({tools:[{type:'function',function:{name:'lookup',parameters:{type:'object'}}}]});
+  await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgy(t,'{"content":null,"tool_calls":[{"name":"other","arguments":{}}]}'),tools}),/valid function call/);
+  await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgy(t,'[1]'),responseFormat:{type:'json_object'}}),/valid structured output/);
+  const emitted=[];
+  assert.equal(await runAntigravity([{role:'user',content:'hi'}],signal(),d=>emitted.push(d),{binary:fakeAgy(t,'{"a":1}'),responseFormat:{type:'json_object'}}),'{"a":1}');
+  assert.deepEqual(emitted,['{"a":1}']);
 });
