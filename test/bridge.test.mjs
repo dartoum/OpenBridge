@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createBridge } from '../src/server.mjs';
 import { defaultConfig } from '../src/config.mjs';
 
@@ -134,4 +140,19 @@ test('CLI maintenance requires admin access, blocks inference and cannot interru
  const pending=post();await ready;assert.equal((await lock(true)).status,409);
  complete('ok');assert.equal((await pending).status,200);
  assert.equal((await lock(true)).status,200);assert.equal((await lock(false)).status,200);
+});
+
+test('the server process exits with the reason when its port is taken', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'openbridge-port-test-'));
+  const blocker = net.createServer();
+  t.after(() => { blocker.close(); rmSync(dir, { recursive:true, force:true }); });
+  await new Promise(resolve => blocker.listen(0, '127.0.0.1', resolve));
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/server.mjs', import.meta.url))], { cwd:dir, stdio:['pipe', 'ignore', 'pipe'],
+    env:{ ...process.env, PORT:String(blocker.address().port), BRIDGE_CONFIG_PATH:join(dir, 'config.json'), BRIDGE_EXIT_ON_STDIN_CLOSE:'1' } });
+  let stderr = '';
+  child.stderr.on('data', data => { stderr += data; });
+  const code = await Promise.race([new Promise(resolve => child.once('close', resolve)), new Promise(resolve => setTimeout(() => resolve('still running'), 5000))]);
+  child.kill('SIGKILL');
+  assert.equal(code, 1);
+  assert.match(stderr, /EADDRINUSE/);
 });

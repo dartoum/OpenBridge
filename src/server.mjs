@@ -295,5 +295,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, shutdown);
   // The app holds our stdin pipe open; when it quits or crashes the pipe closes and we must not outlive it.
   if (process.env.BRIDGE_EXIT_ON_STDIN_CLOSE === '1') { process.stdin.on('end', shutdown); process.stdin.on('error', shutdown); process.stdin.resume(); }
-  server.on('error', e => { console.error(e.message); process.exitCode = 1; });
+  // Exit rather than idle: the app's stdin pipe would keep a server that never listened alive, stuck on "Starting…".
+  server.on('error', e => { console.error(e.message); process.exit(1); });
 }
