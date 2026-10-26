@@ -94,7 +94,9 @@ main text at 14pt and secondary text at least 13pt. Bound notifications to the
 detail column and put full technical errors in selectable, copyable details;
 never allow an unbroken error or model ID to determine window width.
 
-Model discovery is explicit, never automatic inference. Claude uses only the CLI
+Model discovery is explicit, never automatic inference. The one exception is the
+fetch that follows a successful CLI update the user started, while the bridge runs.
+Claude uses only the CLI
 initialize control response (no third-party catalogue: it lists models the
 account may not reach); Codex uses its CLI catalogue; API providers use their own
 /models. Preserve existing enabled flags and names and add new IDs disabled. CLI

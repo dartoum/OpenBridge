@@ -238,9 +238,11 @@ A separate management lock refuses an update while a request is active and
 pauses new inference with HTTP 503. The app resumes requests afterward, including
 on update failures, and refreshes installation/version checks. **Resume requests**
 on the Bridge page recovers a pause left by interrupted maintenance. Model choices
-and account login configuration are retained. After an update use **Fetch models**;
-newer binaries can add support, but aliases and account entitlements can still
-lag. An update button does not claim a newer release is available.
+and account login configuration are retained. After a successful update the app
+fetches models again while the bridge runs; new models start off. If the bridge was
+stopped, start it and use **Fetch models**. Newer binaries can add support, but
+aliases and account entitlements can still lag. An update button does not claim a
+newer release is available.
 
 ```sh
 scripts/check-native.sh

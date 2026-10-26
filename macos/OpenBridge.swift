@@ -456,25 +456,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             self.poll()
         }
     }
-    func maintainCLI(_ plan: CLIMaintenancePlan) {
+    func maintainCLI(_ plan: CLIMaintenancePlan, providerID: String) {
         guard !maintenanceRunning, snapshot?.active != true else { return }
         maintenanceRunning = true; rebuildMenu(); maintenanceSucceeded = false; maintenanceOutput = "Running…"
         let locked = snapshot != nil
         let finish: (Int32, String) -> Void = { code, output in
             Task { @MainActor in
                 let success = code == 0 && FileManager.default.isExecutableFile(atPath: plan.expectedPath)
+                // Fetching needs the running bridge; without it the user starts the bridge and fetches by hand.
+                let fetching = success && locked
                 self.maintenanceSucceeded = success
-                self.maintenanceOutput = (success ? "Update completed. Refresh models to check the current catalogue.\n\n" : "Failed (exit \(code)). Your existing configuration was kept.\n\n") + output
-                let resume = {
+                self.maintenanceOutput = (success ? (fetching ? "Update completed. Fetching models…\n\n" : "Update completed. Start the bridge, then fetch models.\n\n") : "Failed (exit \(code)). Your existing configuration was kept.\n\n") + output
+                let resume: (Bool) -> Void = { resumed in
                     self.maintenanceRunning = false; self.rebuildMenu()
                     self.refreshChecks(); self.poll()
+                    // The result shows inline under Models on the provider page, like a manual fetch.
+                    if fetching && resumed { self.discover(providerID) }
                 }
                 if locked {
                     self.request("/bridge/maintenance", method: "POST", body: self.jsonData(["enabled": false])) { result in
-                        if case .failure(let error) = result { self.maintenanceOutput += "\nCould not resume the bridge; restart it: " + error.localizedDescription }
-                        resume()
+                        if case .failure(let error) = result {
+                            self.maintenanceOutput += "\nCould not resume the bridge; restart it: " + error.localizedDescription
+                            resume(false)
+                        } else { resume(true) }
                     }
-                } else { resume() }
+                } else { resume(false) }
             }
         }
         let run = {

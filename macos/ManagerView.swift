@@ -599,7 +599,7 @@ struct CLIMaintenanceSheet: View {
                         Text(plan.command).font(identifierFont).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
                         Text("Bridge executable after completion: \(plan.expectedPath)").font(secondaryFont).foregroundStyle(.secondary)
-                        Text("New bridge requests pause while this runs. No model choices or account logins are changed. Fetch models afterward to refresh the catalogue.").foregroundStyle(.secondary)
+                        Text("New bridge requests pause while this runs. No model choices or account logins are changed. \(app.snapshot == nil ? "Start the bridge afterward to fetch models." : "Models are fetched again after a successful update.")").foregroundStyle(.secondary)
                         if app.snapshot?.active == true { Text("Wait for the active request to finish.").foregroundStyle(.orange) }
                     case .failure(let error): Text(error.localizedDescription).foregroundStyle(.orange)
                     }
@@ -615,7 +615,7 @@ struct CLIMaintenanceSheet: View {
                 Spacer()
                 Button(started ? "Close" : "Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(app.maintenanceRunning)
                 if case .success(let plan) = plan, !started {
-                    Button(plan.title) { started = true; app.maintainCLI(plan) }
+                    Button(plan.title) { started = true; app.maintainCLI(plan, providerID: provider.id) }
                         .keyboardShortcut(.defaultAction)
                         .disabled(app.maintenanceRunning || app.snapshot?.active == true)
                 }
