@@ -43,6 +43,8 @@ function checkCliOptions(provider, body) {
   const allowed = new Set([...CLI_OPTIONS, ...IGNORED_ON_CLI]);
   const supportsStructured = provider.type === 'claude' || provider.type === 'antigravity';
   if (supportsStructured || body.response_format?.type === 'text') allowed.add('response_format');
+  // agy cannot enforce a schema without its own tools: its --json-schema makes it loop on a `finish` tool the text-only profile lacks.
+  if (provider.type === 'antigravity' && body.response_format?.type === 'json_schema') throw httpError(422, 'Antigravity supports response_format text and json_object, not json_schema');
   // Claude and Antigravity can emulate function calling (see toolMode); Codex cannot.
   const emulated = supportsStructured && body.tools?.length > 0;
   if (emulated) {

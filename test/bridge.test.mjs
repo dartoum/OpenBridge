@@ -156,3 +156,14 @@ test('the server process exits with the reason when its port is taken', async t 
   assert.equal(code, 1);
   assert.match(stderr, /EADDRINUSE/);
 });
+
+test('Antigravity refuses response_format json_schema but accepts json_object', async t => {
+  const server = createBridge({ key: 'test', runner: async () => '{"a":1}' });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  t.after(() => server.close());
+  const post = response_format => fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, { method: 'POST', headers: { Authorization: 'Bearer test' }, body: JSON.stringify({ model: 'google/gemini-3.8-flash-medium', messages: [{ role: 'user', content: 'hi' }], response_format }) });
+  const refused = await post({ type: 'json_schema', json_schema: { name: 'x', schema: { type: 'object' } } });
+  assert.equal(refused.status, 422);
+  assert.match((await refused.json()).error.message, /json_object/);
+  assert.equal((await post({ type: 'json_object' })).status, 200);
+});

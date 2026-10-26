@@ -1,8 +1,9 @@
 # OpenBridge follow-up
 
-- Google: Antigravity adapter now active with sandbox isolation and tool-calling
-  emulation via `--json-schema` (matching the Claude adapter pattern). Verified
-  live with both pure text completions and tool calling for client apps like OpenCode.
+- Google: Antigravity runs text-only (profile + sandbox), with prompt-based tool
+  emulation and json_object. Live-checked through the adapter on 2026-10-26:
+  text, a function call, json_object and a 150 KB prompt on stdin. Not checked
+  through OpenCode itself, nor streaming over HTTP.
 - Verify a real GOAT request after the user supplies their key in the GUI.
 - Verify Keychain save/read across app rebuild/restart using a test account key.
 - Clean-Mac acceptance: bundled Node, missing CLI diagnostics, install/login flow,

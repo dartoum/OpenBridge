@@ -193,7 +193,8 @@ export function parseAntigravity(event) {
   if (event.event === 'step_update') {
     const step = event.step_update || {};
     // Allowlist, not denylist: a step type this adapter does not know is refused rather than assumed harmless.
-    if (!['agent_response', 'plan'].includes(step.step_type)) return { error:'Antigravity attempted a tool action' };
+    // user_input echoes the message we sent on stdin.
+    if (!['agent_response', 'plan', 'user_input'].includes(step.step_type)) return { error:'Antigravity attempted a tool action' };
     return { text:step.step_type === 'agent_response' ? step.text_delta || '' : '' };
   }
   if (event.event === 'result') {
@@ -216,17 +217,16 @@ function cleanMarkdownFences(text) {
 
 export async function runAntigravity(messages, signal, emit, { model, binary = process.env.AGY_BIN || join(homedir(), '.local/bin/agy'), responseFormat, effort, tools, onModel = () => {} } = {}) {
   const structured = tools || (responseFormat && responseFormat.type !== 'text');
-  const args = ['--output-format', 'stream-json', '--disable-slash-commands', '--sandbox', '--print-timeout', '110s'];
+  const args = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--agent', 'openbridge-text', '--disable-slash-commands', '--sandbox', '--print-timeout', '110s'];
   if (model) args.push('--model', model);
   if (effort) args.push('--effort', effort);
-  if (tools) args.push('--json-schema', JSON.stringify(tools.schema));
-  else if (responseFormat?.type === 'json_schema') args.push('--json-schema', JSON.stringify(responseFormat.json_schema.schema));
 
   let prompt = conversationPrompt(messages);
   if (tools) prompt += tools.prompt;
   else if (responseFormat?.type === 'json_object') prompt += '\nReturn only a valid JSON object, without markdown fences or commentary.';
 
-  args.unshift('-p', prompt);
+  // The prompt goes in on stdin: as a -p argument it was capped at 96 KiB. (-p cannot be combined with stdin input.)
+  const input = JSON.stringify({ event:'user', message:{ content:prompt } }) + '\n';
 
   const rawResult = await runEvents({
     binary,
@@ -235,17 +235,21 @@ export async function runAntigravity(messages, signal, emit, { model, binary = p
     signal,
     emit: delta => { if (!structured) emit(delta); },
     parse: event => {
-      if (event.event === 'init' && Array.isArray(event.init?.models) && event.init.models[0]?.model) {
-        onModel(event.init.models[0].model);
-      }
+      if (event.event === 'init' && typeof event.init?.model === 'string') onModel(event.init.model);
       return parseAntigravity(event);
     },
-    ignoreStdin: true,
+    input,
+    prepare(cwd) {
+      // The profile is what switches agy's tools off (web search, commands, browser...); without it they all run.
+      mkdirSync(join(cwd, '.agents/agents'), { recursive:true });
+      writeFileSync(join(cwd, '.agents/agents/openbridge-text.md'), '---\nname: openbridge-text\ndescription: Plain text completion without tools\ntools: []\nmainAgent: true\nsubagent: false\nmcpServers: []\nskills: []\nplugins: []\ncommandExecutionPolicy: off\n---\nAnswer the supplied conversation directly. Do not use tools, skills or other agents.\n');
+    },
   });
 
+  const answer = rawResult;
   if (tools) {
     let parsed;
-    try { parsed = JSON.parse(cleanMarkdownFences(rawResult)); }
+    try { parsed = JSON.parse(cleanMarkdownFences(answer)); }
     catch { throw Error('Antigravity did not return valid JSON for tool call'); }
     const valid = parsed && typeof parsed === 'object' && Array.isArray(parsed.tool_calls) && (parsed.content === null || typeof parsed.content === 'string')
       && parsed.tool_calls.every(call => call && tools.names.includes(call.name) && call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments));
@@ -255,7 +259,7 @@ export async function runAntigravity(messages, signal, emit, { model, binary = p
 
   if (structured) {
     try {
-      const parsed = JSON.parse(cleanMarkdownFences(rawResult));
+      const parsed = JSON.parse(cleanMarkdownFences(answer));
       if (parsed === undefined || (responseFormat.type === 'json_object' && (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)))) throw Error('Missing JSON output');
       const output = JSON.stringify(parsed);
       emit(output);

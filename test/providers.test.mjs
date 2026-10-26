@@ -38,6 +38,7 @@ test('Antigravity fails closed when the CLI attempts a tool action or reports a 
   assert.ok(parseAntigravity({event:'step_update',step_update:{step_type:'file_write'}}).error);
   assert.ok(parseAntigravity({event:'step_update',step_update:{}}).error);
   assert.equal(parseAntigravity({event:'step_update',step_update:{step_type:'plan'}}).error,undefined);
+  assert.equal(parseAntigravity({event:'step_update',step_update:{step_type:'user_input'}}).error,undefined);
   assert.equal(parseAntigravity({event:'step_update',step_update:{step_type:'agent_response',text_delta:'hello'}}).text,'hello');
   assert.equal(parseAntigravity({event:'result',result:{status:'SUCCESS',response:'hello'}}).done,true);
   assert.ok(parseAntigravity({event:'result',result:{status:'ERROR',error:'quota'}}).error);
@@ -52,7 +53,7 @@ test('CLI adapter preserves the original isolation failure over shutdown events'
 function fakeAgy(t, response) {
   const dir=mkdtempSync(join(tmpdir(),'openbridge-agy-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
   const file=join(dir,'agy');
-  writeFileSync(file,`#!/usr/bin/env node\nconsole.log(JSON.stringify({event:'init',init:{models:[{model:'fixture-model'}]}}));console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',response:${JSON.stringify(response)}}}));\n`);
+  writeFileSync(file,`#!/usr/bin/env node\nprocess.stdin.resume();console.log(JSON.stringify({event:'init',init:{model:'fixture-model'}}));console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',response:${JSON.stringify(response)}}}));\n`);
   chmodSync(file,0o755);
   return file;
 }
@@ -107,4 +108,23 @@ console.log(JSON.stringify({type:'result',result:'inline='+inline+' size='+size+
   const reply=await runClaude([{role:'system',content:system},{role:'user',content:'hi'}],signal(),()=>{},{binary:file});
   assert.match(reply,/inline=false size=204800/);
   assert.ok(Number(reply.match(/biggestArg=(\d+)/)[1])<96*1024);
+});
+
+test('Antigravity receives a prompt above the argument limit on stdin, not as an argument', async t => {
+  const dir=mkdtempSync(join(tmpdir(),'openbridge-agy-stdin-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const file=join(dir,'agy');
+  writeFileSync(file,`#!/usr/bin/env node
+const args=process.argv.slice(2);let data='';
+process.stdin.on('data',d=>{data+=d;if(!data.includes('\\n'))return;process.stdin.pause();
+  const message=JSON.parse(data.trim());
+  const biggest=Math.max(...args.map(a=>Buffer.byteLength(a)));
+  console.log(JSON.stringify({event:'step_update',step_update:{step_type:'user_input'}}));
+  console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',response:'event='+message.event+' print='+args.includes('-p')+' biggestArg='+biggest+' promptBytes='+Buffer.byteLength(message.message.content)}}));
+});
+`);
+  chmodSync(file,0o755);
+  const reply=await runAntigravity([{role:'user',content:'y'.repeat(200*1024)}],signal(),()=>{},{binary:file});
+  assert.match(reply,/event=user print=false/);
+  assert.ok(Number(reply.match(/biggestArg=(\d+)/)[1])<96*1024);
+  assert.ok(Number(reply.match(/promptBytes=(\d+)/)[1])>200*1024);
 });

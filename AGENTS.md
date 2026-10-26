@@ -47,11 +47,16 @@ login status and a successful real request are separate observations.
 ## Google
 
 Consumer Gemini CLI support ended June 18, 2026. Use Antigravity (`agy`) rather
-than Gemini CLI or cookie adapters. In print mode, agy reports its global tool map
-during init; the adapter enforces isolation by rejecting any actual tool execution
-events (`step_type` other than `agent_response` / `plan`) and sandbox-restricting
-execution. Tool calling and structured output are supported via `--json-schema`
-emulation (labelled with `X-OpenBridge-Tools: emulated`).
+than Gemini CLI or cookie adapters. agy reports its global tool map during init
+and runs those tools (web search, commands, browser) unless a text-only agent
+profile (`--agent openbridge-text`, written into the request's temp dir) switches
+them off: keep the profile. The adapter additionally rejects any step other than
+`agent_response` / `plan` / `user_input` and sandbox-restricts execution. The
+prompt goes in on stdin (`--input-format stream-json`, message
+`{"event":"user","message":{"content":…}}`), not as an argument. Never pass
+`--json-schema`: without agy's own tools it loops on a missing `finish` tool.
+Tool calling and `json_object` are therefore prompt-based and validated by the
+bridge (tools labelled `X-OpenBridge-Tools: emulated`); `json_schema` is 422.
 
 ## Verification
 
@@ -67,8 +72,8 @@ message arrays, tool results, finish reasons and upstream usage in JSON and SSE.
 Clients execute API functions; never execute them in the bridge. Function
 calling on CLI adapters (Claude and Antigravity) is emulated through --json-schema (toolMode in src/providers.mjs): always
 buffered, always labelled with X-OpenBridge-Tools: emulated, never described as
-native. ChatGPT stays 422 for tools. CLI adapters normalize text arrays. Claude and Antigravity additionally map response_format
-json_schema to --json-schema and validate json_object responses. Buffer
+native. ChatGPT stays 422 for tools. CLI adapters normalize text arrays. Claude additionally maps response_format
+json_schema to --json-schema; Claude and Antigravity validate json_object responses. Buffer
 structured replies, never stream unstructured preamble. Other unsupported
 controls/functions return 422. The only options a CLI route may drop are the
 harmless length/sampling ones (`IGNORED_ON_CLI` in src/server.mjs), and then
