@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {defaultConfig, resolveConfiguredModel} from '../src/config.mjs';
-import { parseCodex, parseAntigravity, codexArgs, runEvents, cleanEnvironment, runAntigravity, runClaude, toolMode } from '../src/providers.mjs';
+import { parseCodex, parseAntigravity, codexArgs, runEvents, cleanEnvironment, runAntigravity, runClaude, toolMode, claudeUsage, codexUsage, antigravityUsage } from '../src/providers.mjs';
 
 test('concrete model IDs are fixed while subscription follows the menu', () => {
   const config=defaultConfig();config.selectedModel='chatgpt/default';
@@ -127,4 +127,15 @@ process.stdin.on('data',d=>{data+=d;if(!data.includes('\\n'))return;process.stdi
   assert.match(reply,/event=user print=false/);
   assert.ok(Number(reply.match(/biggestArg=(\d+)/)[1])<96*1024);
   assert.ok(Number(reply.match(/promptBytes=(\d+)/)[1])>200*1024);
+});
+
+test('CLI usage is mapped as reported, without estimates', () => {
+  // Shapes copied from real CLI result events. Claude's input_tokens excludes cache; Codex's includes it.
+  assert.deepEqual(claudeUsage({input_tokens:2,cache_creation_input_tokens:2572,cache_read_input_tokens:649,output_tokens:4,output_tokens_details:{thinking_tokens:0}}),
+    {prompt_tokens:3223,completion_tokens:4,total_tokens:3227,prompt_tokens_details:{cached_tokens:649},completion_tokens_details:{reasoning_tokens:0}});
+  assert.deepEqual(codexUsage({input_tokens:15243,cached_input_tokens:12288,output_tokens:5,reasoning_output_tokens:0}),
+    {prompt_tokens:15243,completion_tokens:5,total_tokens:15248,prompt_tokens_details:{cached_tokens:12288},completion_tokens_details:{reasoning_tokens:0}});
+  assert.deepEqual(antigravityUsage({input_tokens:9977,output_tokens:24,thinking_tokens:23,cache_read_tokens:0,total_tokens:10001}),
+    {prompt_tokens:9977,completion_tokens:24,total_tokens:10001,completion_tokens_details:{reasoning_tokens:23}});
+  for (const map of [claudeUsage, codexUsage, antigravityUsage]) { assert.equal(map(undefined), undefined); assert.equal(map({input_tokens:'5'}), undefined); }
 });

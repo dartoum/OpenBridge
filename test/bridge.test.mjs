@@ -222,3 +222,18 @@ test('upstream statuses the client can act on pass through; others stay 502', as
     if (status === 429) assert.equal(response.headers.get('retry-after'), '7');
   }
 });
+
+test('CLI token usage reaches the client in JSON, and in SSE only when include_usage is asked for', async t => {
+  const usage = { prompt_tokens:10, completion_tokens:3, total_tokens:13 };
+  const server = createBridge({ key:'test', runner: async (m, s, emit, id, { onUsage }) => { onUsage(usage); emit('hi'); return 'hi'; } });
+  await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const post = extra => fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, { method:'POST', headers:{ Authorization:'Bearer test' }, body:JSON.stringify({ model:'claude-subscription', messages:[{ role:'user', content:'x' }], ...extra }) });
+  assert.deepEqual((await (await post({})).json()).usage, usage);
+  const plain = await (await post({ stream:true })).text();
+  assert.equal(plain.includes('total_tokens'), false);
+  const asked = await post({ stream:true, stream_options:{ include_usage:true } });
+  assert.equal(asked.headers.get('x-openbridge-ignored')?.includes('stream_options') ?? false, false);
+  const chunks = (await asked.text()).split('\n').filter(l => l.startsWith('data: {')).map(l => JSON.parse(l.slice(6)));
+  assert.deepEqual(chunks.at(-1).choices, []);
+  assert.deepEqual(chunks.at(-1).usage, usage);
+});

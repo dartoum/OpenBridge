@@ -156,7 +156,11 @@ carries `X-OpenBridge-Ignored` naming them, so a client can notice. The token
 limit therefore does not apply on CLI routes.
 Images, embeddings and Responses API are not implemented. Browser origins are
 blocked; call from a backend on this Mac. One request at a time: others wait up to 30 seconds
-for their turn, then get 429 with Retry-After. 120-second timeout and cancellation. No invented token counts or quota estimates.
+for their turn, then get 429 with Retry-After. 120-second timeout and cancellation. No invented token counts or quota estimates: CLI routes return the
+`usage` their CLI reports (JSON always; SSE as a final chunk when
+`stream_options.include_usage` is true), mapped to Chat Completions fields. The
+CLIs count differently (Claude's input excludes cache, Codex's includes it) and
+an emulated tool call counts the added prompt; Antigravity gives no cache split.
 
 The app uses English labels and diagnostics, 14-point main text and 13-point
 secondary text. Results appear next to the control that caused them (a model's

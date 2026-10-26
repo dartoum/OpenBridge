@@ -22,6 +22,25 @@ function stopCli(child, grace = KILL_GRACE_MS) {
   setTimeout(() => { if (child.exitCode === null && child.signalCode === null) send('SIGKILL'); }, grace).unref();
 }
 
+// Token counts exactly as the CLIs report them, mapped to the Chat Completions shape. Nothing is estimated: missing or
+// non-numeric fields give no usage at all. The CLIs count differently, hence one mapper each.
+const count = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+function usageShape(prompt, completion, { cached, reasoning } = {}) {
+  if (prompt === undefined || completion === undefined) return undefined;
+  return { prompt_tokens:prompt, completion_tokens:completion, total_tokens:prompt + completion,
+    ...(cached !== undefined ? { prompt_tokens_details:{ cached_tokens:cached } } : {}),
+    ...(reasoning !== undefined ? { completion_tokens_details:{ reasoning_tokens:reasoning } } : {}) };
+}
+// Claude's input_tokens excludes cached tokens: the prompt is input + cache creation + cache read.
+export function claudeUsage(usage) {
+  const input = count(usage?.input_tokens), created = count(usage?.cache_creation_input_tokens) ?? 0, read = count(usage?.cache_read_input_tokens) ?? 0;
+  return usageShape(input === undefined ? undefined : input + created + read, count(usage?.output_tokens), { cached:count(usage?.cache_read_input_tokens), reasoning:count(usage?.output_tokens_details?.thinking_tokens) });
+}
+// Codex's input_tokens already includes the cached ones.
+export const codexUsage = usage => usageShape(count(usage?.input_tokens), count(usage?.output_tokens), { cached:count(usage?.cached_input_tokens), reasoning:count(usage?.reasoning_output_tokens) });
+// agy reports no cached/non-cached split we can rely on, so only the totals are passed on.
+export const antigravityUsage = usage => usageShape(count(usage?.input_tokens), count(usage?.output_tokens), { reasoning:count(usage?.thinking_tokens) });
+
 const ARGUMENT_LIMIT = 96 * 1024;
 const tooLarge = args => args.some(value => Buffer.byteLength(value) > ARGUMENT_LIMIT);
 
@@ -49,15 +68,15 @@ export function toolMode({ tools, toolChoice, parallelToolCalls }) {
   return { names, schema, prompt };
 }
 
-export function runProvider(messages, signal, emit, id, { provider, modelSpec, options = {}, effort, tools, onModel }) {
+export function runProvider(messages, signal, emit, id, { provider, modelSpec, options = {}, effort, tools, onModel, onUsage }) {
   const model = modelSpec.upstreamModel, binary = provider.cliPath;
-  if (provider.type === 'claude') return runClaude(messages, signal, emit, { model, binary, responseFormat:options.response_format, effort, tools, onModel });
-  if (provider.type === 'codex') return runCodex(messages, signal, emit, { model, binary, effort });
-  if (provider.type === 'antigravity') return runAntigravity(messages, signal, emit, { model, binary, responseFormat:options.response_format, effort, tools, onModel });
+  if (provider.type === 'claude') return runClaude(messages, signal, emit, { model, binary, responseFormat:options.response_format, effort, tools, onModel, onUsage });
+  if (provider.type === 'codex') return runCodex(messages, signal, emit, { model, binary, effort, onUsage });
+  if (provider.type === 'antigravity') return runAntigravity(messages, signal, emit, { model, binary, responseFormat:options.response_format, effort, tools, onModel, onUsage });
   throw Error('Unsupported provider');
 }
 
-export function runClaude(messages, signal, onText, { model = 'sonnet', binary = process.env.CLAUDE_BIN || join(homedir(), '.local/bin/claude'), responseFormat, effort, tools, onModel = () => {} } = {}) {
+export function runClaude(messages, signal, onText, { model = 'sonnet', binary = process.env.CLAUDE_BIN || join(homedir(), '.local/bin/claude'), responseFormat, effort, tools, onModel = () => {}, onUsage = () => {} } = {}) {
   return new Promise((resolve, reject) => {
     const structured = tools || (responseFormat && responseFormat.type !== 'text');
     let system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n') || 'You are a helpful text assistant. Answer the user directly.';
@@ -84,7 +103,7 @@ export function runClaude(messages, signal, onText, { model = 'sonnet', binary =
         const event = JSON.parse(text);
         if (event.type === 'system' && event.subtype === 'init' && typeof event.model === 'string') onModel(event.model);
         if (!structured && event.type === 'stream_event' && event.event?.delta?.type === 'text_delta') onText(event.event.delta.text);
-        if (event.type === 'result') result = event;
+        if (event.type === 'result') { result = event; const usage = claudeUsage(event.usage); if (usage) onUsage(usage); }
       } catch { failure = Error('Invalid CLI event'); stop(); }
     };
     child.stdout.on('data', data => {
@@ -185,8 +204,12 @@ export function parseCodex(event) {
   return { text:event.type === 'item.completed' && event.item?.type === 'agent_message' ? event.item.text : '', done:event.type === 'turn.completed' };
 }
 
-export function runCodex(messages, signal, emit, { model = 'default', binary = process.env.CODEX_BIN || join(homedir(), '.local/bin/codex'), effort } = {}) {
-  return runEvents({ binary, args:codexArgs({ model, effort }), messages, signal, emit, parse:parseCodex });
+export function runCodex(messages, signal, emit, { model = 'default', binary = process.env.CODEX_BIN || join(homedir(), '.local/bin/codex'), effort, onUsage = () => {} } = {}) {
+  const parse = event => {
+    if (event.type === 'turn.completed') { const usage = codexUsage(event.usage); if (usage) onUsage(usage); }
+    return parseCodex(event);
+  };
+  return runEvents({ binary, args:codexArgs({ model, effort }), messages, signal, emit, parse });
 }
 
 export function parseAntigravity(event) {
@@ -215,7 +238,7 @@ function cleanMarkdownFences(text) {
   return trimmed;
 }
 
-export async function runAntigravity(messages, signal, emit, { model, binary = process.env.AGY_BIN || join(homedir(), '.local/bin/agy'), responseFormat, effort, tools, onModel = () => {} } = {}) {
+export async function runAntigravity(messages, signal, emit, { model, binary = process.env.AGY_BIN || join(homedir(), '.local/bin/agy'), responseFormat, effort, tools, onModel = () => {}, onUsage = () => {} } = {}) {
   const structured = tools || (responseFormat && responseFormat.type !== 'text');
   const args = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--agent', 'openbridge-text', '--disable-slash-commands', '--sandbox', '--print-timeout', '110s'];
   if (model) args.push('--model', model);
@@ -236,6 +259,7 @@ export async function runAntigravity(messages, signal, emit, { model, binary = p
     emit: delta => { if (!structured) emit(delta); },
     parse: event => {
       if (event.event === 'init' && typeof event.init?.model === 'string') onModel(event.init.model);
+      if (event.event === 'result') { const usage = antigravityUsage(event.result?.usage); if (usage) onUsage(usage); }
       return parseAntigravity(event);
     },
     input,

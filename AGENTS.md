@@ -69,6 +69,10 @@ Never commit keys, provider credentials, prompts, response logs or build output.
 
 API-provider requests use native Chat Completions forwarding: preserve tools,
 message arrays, tool results, finish reasons and upstream usage in JSON and SSE.
+CLI routes return only the usage their CLI reports, mapped per CLI in
+src/providers.mjs (`claudeUsage`, `codexUsage`, `antigravityUsage`); none when a
+field is missing, never an estimate. Upstream 429/400/404/408/413/422 keep their
+status (429 with Retry-After); 401/403/5xx stay 502, since 401 means the bridge key.
 Clients execute API functions; never execute them in the bridge. Function
 calling on CLI adapters (Claude and Antigravity) is emulated through --json-schema (toolMode in src/providers.mjs): always
 buffered, always labelled with X-OpenBridge-Tools: emulated, never described as

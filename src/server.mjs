@@ -56,7 +56,9 @@ function checkCliOptions(provider, body) {
   const unsupported = Object.keys(body).filter(k => !allowed.has(k));
   const functions = !emulated && (body.tools?.length || (body.tool_choice && body.tool_choice !== 'none') || body.messages.some(m => m.role === 'tool' || m.tool_calls));
   if (unsupported.length || functions) throw httpError(422, `${provider.name} CLI does not support these options: ${unsupported.join(', ') || 'function calling'}. Use an OpenAI-compatible API provider for these features.`);
-  return IGNORED_ON_CLI.filter(name => body[name] !== undefined);
+  // stream_options { include_usage } is honoured (a usage chunk); anything else in it is ignored.
+  const honoured = name => name === 'stream_options' && Object.keys(body.stream_options || {}).every(k => k === 'include_usage');
+  return IGNORED_ON_CLI.filter(name => body[name] !== undefined && !honoured(name));
 }
 
 // A request's reasoning_effort overrides the level configured for the model; both must be a level the CLI reported.
@@ -235,7 +237,10 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
     const timer = setTimeout(() => controller.abort(), timeout);
     res.on('close', () => controller.abort());
     const id = `chatcmpl-${randomUUID()}`, created = Math.floor(Date.now() / 1000);
-    let streaming = false, text = '', resolvedModel;
+    let streaming = false, text = '', resolvedModel, usage;
+    // As OpenAI does: a final chunk with empty choices, only when the client asked via stream_options.include_usage.
+    const usageChunk = () => { if (usage && body.stream_options?.include_usage === true) event({ id, object:'chat.completion.chunk', created, model:spec.id, choices:[], usage }); };
+    const withUsage = value => usage ? { ...value, usage } : value;
     const event = value => {
       if (res.writableLength > STREAM_LIMIT) { controller.abort(); return; }
       if (!res.destroyed) res.write(`data: ${JSON.stringify(value)}\n\n`);
@@ -257,7 +262,7 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
           if (!body.stream || res.destroyed) return;
           if (!streaming) { startStream(); streaming = true; chunk({ role:'assistant' }); }
           chunk({ content:delta });
-        }, spec.id, { provider, modelSpec:spec, options:body, effort, tools, onModel:value => { resolvedModel = value; } });
+        }, spec.id, { provider, modelSpec:spec, options:body, effort, tools, onModel:value => { resolvedModel = value; }, onUsage:value => { usage = value; } });
         if (result && typeof result === 'object') {
           // Emulated function calling: the answer is buffered, so tool calls arrive whole.
           const calls = result.tool_calls.map(call => ({ id:`call_${randomUUID().replaceAll('-', '').slice(0, 24)}`, type:'function', function:{ name:call.name, arguments:JSON.stringify(call.arguments) } }));
@@ -267,13 +272,15 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
             chunk({ role:'assistant', ...(result.content ? { content:result.content } : {}) });
             if (calls.length) chunk({ tool_calls:calls.map((call, index) => ({ index, ...call })) });
             chunk({}, finish);
+            usageChunk();
             res.end('data: [DONE]\n\n');
-          } else sendJSON(res, 200, { id, object:'chat.completion', created, model:spec.id, choices:[{ index:0, message:{ role:'assistant', content:result.content ?? null, ...(calls.length ? { tool_calls:calls } : {}) }, finish_reason:finish }] }, extraHeaders);
+          } else sendJSON(res, 200, withUsage({ id, object:'chat.completion', created, model:spec.id, choices:[{ index:0, message:{ role:'assistant', content:result.content ?? null, ...(calls.length ? { tool_calls:calls } : {}) }, finish_reason:finish }] }), extraHeaders);
         } else if (body.stream) {
           if (!streaming) { startStream(); chunk({ role:'assistant', content:result }); }
           chunk({}, 'stop');
+          usageChunk();
           res.end('data: [DONE]\n\n');
-        } else sendJSON(res, 200, { id, object:'chat.completion', created, model:spec.id, choices:[{ index:0, message:{ role:'assistant', content:result }, finish_reason:'stop' }] }, extraHeaders);
+        } else sendJSON(res, 200, withUsage({ id, object:'chat.completion', created, model:spec.id, choices:[{ index:0, message:{ role:'assistant', content:result }, finish_reason:'stop' }] }), extraHeaders);
       }
       stats.succeeded++;
       checks[spec.id] = record(true);
