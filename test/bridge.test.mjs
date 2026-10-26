@@ -204,3 +204,21 @@ test('buffered streaming replies send SSE keepalive comments while the CLI works
   assert.match(text, /"tool_calls"/);
   assert.match(text, /\[DONE\]/);
 });
+
+test('upstream statuses the client can act on pass through; others stay 502', async t => {
+  const upstream = http.createServer();
+  await new Promise(r => upstream.listen(0, '127.0.0.1', r)); t.after(() => upstream.close());
+  const config = defaultConfig(); config.providers[3].baseURL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  const server = createBridge({ key:'test', config });
+  await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`, headers = { Authorization:'Bearer test' };
+  await fetch(base + '/bridge/credentials', { method:'POST', headers, body:JSON.stringify({ providerID:'commandcode', key:'k' }) });
+  for (const [status, expected] of [[429, 429], [422, 422], [401, 502], [500, 502]]) {
+    upstream.removeAllListeners('request');
+    upstream.on('request', (req, res) => { res.writeHead(status, { 'Content-Type':'application/json', ...(status === 429 ? { 'Retry-After':'7' } : {}) }); res.end(JSON.stringify({ error:{ message:'fixture' } })); });
+    const response = await fetch(base + '/v1/chat/completions', { method:'POST', headers, body:JSON.stringify({ model:'commandcode/deepseek/deepseek-v4-flash', messages:[{ role:'user', content:'x' }] }) });
+    assert.equal(response.status, expected, `upstream ${status}`);
+    assert.match((await response.json()).error.message, new RegExp('HTTP ' + status));
+    if (status === 429) assert.equal(response.headers.get('retry-after'), '7');
+  }
+});

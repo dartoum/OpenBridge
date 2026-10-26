@@ -12,6 +12,7 @@ const CLI_OPTIONS = ['model', 'messages', 'stream', 'tools', 'tool_choice', 'rea
 // Harmless length/sampling controls a CLI cannot take: dropped, and named in X-OpenBridge-Ignored on the response.
 const IGNORED_ON_CLI = ['max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'frequency_penalty', 'presence_penalty', 'stop', 'seed', 'user', 'stream_options'];
 const STREAM_LIMIT = 4 * 1024 * 1024;
+const PASS_THROUGH = new Set([400, 404, 408, 413, 422, 429]);
 
 export function validate(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw Error('Expected a JSON object');
@@ -89,7 +90,14 @@ async function forwardChat({ provider, spec, body, apiKey, signal, res, event })
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   if (provider.id === 'commandcode' && !apiKey) throw Error('Command Code API key is not configured');
   const upstream = await fetch(provider.baseURL.replace(/\/$/, '') + '/chat/completions', { method:'POST', headers, signal, redirect:'error', body:JSON.stringify({ ...body, model:spec.upstreamModel }) });
-  if (!upstream.ok) throw Error(`Provider returned HTTP ${upstream.status}: ${(await upstream.text()).slice(0, 1500)}`);
+  if (!upstream.ok) {
+    const message = `Provider returned HTTP ${upstream.status}: ${(await upstream.text()).slice(0, 1500)}`;
+    // Only statuses the client can act on pass through. A provider's 401/403 is about the bridge's key for it, not the
+    // client's bridge key, so those (and 5xx) stay 502 rather than send the client looking in the wrong place.
+    if (!PASS_THROUGH.has(upstream.status)) throw Error(message);
+    const retry = upstream.headers.get('retry-after');
+    throw httpError(upstream.status, message, retry && /^[\w ,:+-]{1,40}$/.test(retry) ? { 'Retry-After':retry } : undefined);
+  }
   if (!body.stream) {
     const value = await upstream.json();
     value.model = spec.id;
@@ -273,7 +281,7 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
       stats.failed++;
       checks[spec.id] = { ...record(false), message:e.message };
       if (res.headersSent) { event({ error:{ message:e.message, type:'bridge_error' } }); res.end(); }
-      else sendError(res, controller.signal.aborted ? 504 : 502, e.message);
+      else sendError(res, controller.signal.aborted ? 504 : e.status || 502, e.message, controller.signal.aborted ? undefined : e.headers);
     } finally {
       clearTimeout(timer); clearInterval(keepAliveTimer);
       activeModel = null; currentController = undefined;
