@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {defaultConfig, resolveConfiguredModel} from '../src/config.mjs';
-import { parseCodex, parseAntigravity, codexArgs, runEvents, cleanEnvironment, runAntigravity, toolMode } from '../src/providers.mjs';
+import { parseCodex, parseAntigravity, codexArgs, runEvents, cleanEnvironment, runAntigravity, runClaude, toolMode } from '../src/providers.mjs';
 
 test('concrete model IDs are fixed while subscription follows the menu', () => {
   const config=defaultConfig();config.selectedModel='chatgpt/default';
@@ -88,4 +88,23 @@ writeFileSync(${JSON.stringify(pidFile)},String(child.pid));setInterval(()=>{},1
   const pid=Number(readFileSync(pidFile,'utf8'));
   await new Promise(r=>setTimeout(r,200));
   assert.throws(()=>process.kill(pid,0),{code:'ESRCH'});
+});
+
+test('Claude receives a system prompt above the argument limit through a file', async t => {
+  const dir=mkdtempSync(join(tmpdir(),'openbridge-claude-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const file=join(dir,'claude');
+  writeFileSync(file,`#!/usr/bin/env node
+import {readFileSync} from 'node:fs';
+const args=process.argv.slice(2);
+const inline=args.includes('--system-prompt');
+const path=args[args.indexOf('--system-prompt-file')+1];
+const size=path?readFileSync(path,'utf8').length:0;
+const biggest=Math.max(...args.map(a=>Buffer.byteLength(a)));
+console.log(JSON.stringify({type:'result',result:'inline='+inline+' size='+size+' biggestArg='+biggest}));
+`.replace('#!/usr/bin/env node\nimport','#!/usr/bin/env node\nimport'));
+  chmodSync(file,0o755);
+  const system='x'.repeat(200*1024);
+  const reply=await runClaude([{role:'system',content:system},{role:'user',content:'hi'}],signal(),()=>{},{binary:file});
+  assert.match(reply,/inline=false size=204800/);
+  assert.ok(Number(reply.match(/biggestArg=(\d+)/)[1])<96*1024);
 });

@@ -63,12 +63,14 @@ export function runClaude(messages, signal, onText, { model = 'sonnet', binary =
     let system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n') || 'You are a helpful text assistant. Answer the user directly.';
     if (responseFormat?.type === 'json_object') system += '\nReturn only a valid JSON object, without markdown fences or commentary.';
     if (tools) system += tools.prompt;
-    const args = ['--model', model, '-p', '--safe-mode', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-session-persistence', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--system-prompt', system];
+    // The system prompt carries the tool definitions and can be large: pass it as a file, not as an argument.
+    const cwd = mkdtempSync(join(tmpdir(), 'openbridge-'));
+    writeFileSync(join(cwd, 'system-prompt.txt'), system);
+    const args = ['--model', model, '-p', '--safe-mode', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-session-persistence', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--system-prompt-file', 'system-prompt.txt'];
     if (effort) args.push('--effort', effort);
     if (tools) args.push('--json-schema', JSON.stringify(tools.schema));
     else if (responseFormat?.type === 'json_schema') args.push('--json-schema', JSON.stringify(responseFormat.json_schema.schema));
-    if (tooLarge(args)) { reject(Error('Claude argument exceeds 96 KiB limit')); return; }
-    const cwd = mkdtempSync(join(tmpdir(), 'openbridge-'));
+    if (tooLarge(args)) { rmSync(cwd, { recursive:true, force:true }); reject(Error('Claude argument exceeds 96 KiB limit')); return; }
     const child = spawnCli(binary, args, { cwd, env:cleanEnvironment(), stdio:['pipe', 'pipe', 'pipe'] });
     let buffer = '', stderr = '', result, failure;
     const stop = () => stopCli(child);

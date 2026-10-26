@@ -121,6 +121,7 @@ test('Claude adapter asks for structured output and validates the function calls
   const binary = join(dir, 'claude'), argsFile = join(dir, 'args.json');
   writeFileSync(binary, `#!/usr/bin/env node
 require('node:fs').writeFileSync(process.env.ARGS_FILE, JSON.stringify(process.argv.slice(2)));
+{const a=process.argv.slice(2);require('node:fs').writeFileSync(process.env.ARGS_FILE+'.system', require('node:fs').readFileSync(a[a.indexOf('--system-prompt-file')+1],'utf8'));}
 process.stdin.resume();process.stdin.on('end',()=>{
  const mode=process.env.TOOL_REPLY;
  const out=mode==='bad'?{content:null,tool_calls:[{name:'nope',arguments:{}}]}:mode==='answer'?{content:'Sunny',tool_calls:[]}:{content:null,tool_calls:[{name:'weather',arguments:{city:'Amsterdam'}}]};
@@ -134,7 +135,7 @@ process.stdin.resume();process.stdin.on('end',()=>{
   assert.deepEqual(chunks, []);
   const args = JSON.parse(readFileSync(argsFile, 'utf8'));
   assert.deepEqual(JSON.parse(args[args.indexOf('--json-schema') + 1]).properties.tool_calls.items.properties.name.enum, ['weather']);
-  assert.match(args[args.indexOf('--system-prompt') + 1], /You can call functions/);
+  assert.match(readFileSync(argsFile + '.system', 'utf8'), /You can call functions/);
   assert.equal(args.includes('--tools') && args[args.indexOf('--tools') + 1] === '', true);
   process.env.TOOL_REPLY = 'answer';
   assert.deepEqual(await runClaude([{ role:'user', content:'Hi' }], AbortSignal.timeout(5000), () => {}, { binary, tools }), { content:'Sunny', tool_calls:[] });
