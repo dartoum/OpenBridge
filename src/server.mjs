@@ -286,10 +286,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const adminKey = readOrCreateKey('.bridge-admin-key');
   const server = createBridge({ key, adminKey, configPath:process.env.BRIDGE_CONFIG_PATH || join(process.cwd(), '.bridge-config.json') });
   server.listen(Number(process.env.PORT || 8000), '127.0.0.1', () => console.log('OpenBridge: http://127.0.0.1:' + server.address().port + '/v1 (key in .bridge-key or BRIDGE_API_KEY)'));
-  for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {
+  const shutdown = () => {
     server.cancelActive();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();
-  });
+  };
+  for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, shutdown);
+  // The app holds our stdin pipe open; when it quits or crashes the pipe closes and we must not outlive it.
+  if (process.env.BRIDGE_EXIT_ON_STDIN_CLOSE === '1') { process.stdin.on('end', shutdown); process.stdin.on('error', shutdown); process.stdin.resume(); }
   server.on('error', e => { console.error(e.message); process.exitCode = 1; });
 }

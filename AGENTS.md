@@ -40,7 +40,7 @@ updates affect future calls. Persist nonsecret settings atomically.
 
 The app starts its server at launch unless one already answers on the port, but
 CLI versions and logins are read by the app itself (macos/CLIStatus.swift), so they show
-with the bridge stopped. Settings and model fetching still go through the server. Only stop a server owned by the app. Closing the management window leaves the
+with the bridge stopped. Settings and model fetching still go through the server. Only stop a server owned by the app. The app-owned server holds a stdin pipe from the app (`BRIDGE_EXIT_ON_STDIN_CLOSE=1`) and exits when it closes, so a quit, crash or rebuild never leaves an orphan. Closing the management window leaves the
 menu bar and server alive; quitting stops the app-owned child. Installation,
 login status and a successful real request are separate observations.
 

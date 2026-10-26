@@ -241,7 +241,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         env["PORT"] = "8000"; env["BRIDGE_CONFIG_PATH"] = state.appendingPathComponent("config.json").path
         for key in ["BRIDGE_API_KEY", "COMMAND_CODE_API_KEY", "COMMAND_CODE_MODEL"] { env.removeValue(forKey: key) }
         env["PATH"] = "/usr/local/bin:/opt/homebrew/bin:\(NSHomeDirectory())/.local/bin:/usr/bin:/bin"
+        env["BRIDGE_EXIT_ON_STDIN_CLOSE"] = "1"
         process.environment = env
+        process.standardInput = Pipe() // the server exits when this pipe closes, so it never outlives the app
         // Keep the tail of the server's error output so a failed start can explain itself (for example a busy port).
         let errors = Pipe()
         process.standardOutput = FileHandle.nullDevice; process.standardError = errors
