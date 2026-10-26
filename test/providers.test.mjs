@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {defaultConfig, resolveConfiguredModel} from '../src/config.mjs';
@@ -71,4 +71,21 @@ test('Antigravity rejects tool calls to unknown functions and non-object structu
   const emitted=[];
   assert.equal(await runAntigravity([{role:'user',content:'hi'}],signal(),d=>emitted.push(d),{binary:fakeAgy(t,'{"a":1}'),responseFormat:{type:'json_object'}}),'{"a":1}');
   assert.deepEqual(emitted,['{"a":1}']);
+});
+
+test('a CLI that ignores SIGTERM is killed with its subprocesses, so the request settles', async t => {
+  const dir=mkdtempSync(join(tmpdir(),'openbridge-kill-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const pidFile=join(dir,'child.pid'), file=join(dir,'fixture.mjs');
+  writeFileSync(file,`import {spawn} from 'node:child_process';import {writeFileSync} from 'node:fs';
+process.on('SIGTERM',()=>{});
+const child=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{stdio:'ignore'});
+writeFileSync(${JSON.stringify(pidFile)},String(child.pid));setInterval(()=>{},1000);`);
+  const controller=new AbortController();
+  const run=runEvents({binary:process.execPath,args:[file],messages:[],signal:controller.signal,emit:()=>{},parse:()=>({}),ignoreStdin:true});
+  await new Promise(r=>setTimeout(r,500));
+  controller.abort();
+  await assert.rejects(run,/cancelled or timed out/);
+  const pid=Number(readFileSync(pidFile,'utf8'));
+  await new Promise(r=>setTimeout(r,200));
+  assert.throws(()=>process.kill(pid,0),{code:'ESRCH'});
 });

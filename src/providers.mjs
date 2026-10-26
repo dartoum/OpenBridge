@@ -11,6 +11,17 @@ export function cleanEnvironment() {
   return env;
 }
 
+// Each CLI runs in its own process group so a stop reaches its subprocesses too. SIGTERM first; a CLI that ignores it
+// is killed after the grace period, otherwise its request would never settle and the bridge would stay busy.
+const KILL_GRACE_MS = 3000;
+const spawnCli = (binary, args, options) => spawn(binary, args, { ...options, detached:true });
+function stopCli(child, grace = KILL_GRACE_MS) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const send = signal => { try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch {} } };
+  send('SIGTERM');
+  setTimeout(() => { if (child.exitCode === null && child.signalCode === null) send('SIGKILL'); }, grace).unref();
+}
+
 const ARGUMENT_LIMIT = 96 * 1024;
 const tooLarge = args => args.some(value => Buffer.byteLength(value) > ARGUMENT_LIMIT);
 
@@ -58,9 +69,9 @@ export function runClaude(messages, signal, onText, { model = 'sonnet', binary =
     else if (responseFormat?.type === 'json_schema') args.push('--json-schema', JSON.stringify(responseFormat.json_schema.schema));
     if (tooLarge(args)) { reject(Error('Claude argument exceeds 96 KiB limit')); return; }
     const cwd = mkdtempSync(join(tmpdir(), 'openbridge-'));
-    const child = spawn(binary, args, { cwd, env:cleanEnvironment(), stdio:['pipe', 'pipe', 'pipe'] });
+    const child = spawnCli(binary, args, { cwd, env:cleanEnvironment(), stdio:['pipe', 'pipe', 'pipe'] });
     let buffer = '', stderr = '', result, failure;
-    const stop = () => { child.kill('SIGTERM'); };
+    const stop = () => stopCli(child);
     signal.addEventListener('abort', stop, { once:true });
     if (signal.aborted) stop();
     child.stderr.on('data', data => { stderr = (stderr + data).slice(-8192); });
@@ -116,9 +127,9 @@ export function runEvents({ binary, args, messages, signal, emit, parse, prepare
     const env = cleanEnvironment();
     try { prepare?.(cwd, env); } catch (error) { rmSync(cwd, { recursive:true, force:true }); reject(error); return; }
     if (tooLarge(args)) { rmSync(cwd, { recursive:true, force:true }); reject(Error('Prompt exceeds this CLI adapter’s 96 KiB limit')); return; }
-    const child = spawn(binary, args, { cwd, env, stdio:[ignoreStdin ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+    const child = spawnCli(binary, args, { cwd, env, stdio:[ignoreStdin ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
     let buffer = '', stderr = '', result = '', completed = false, failure;
-    const stop = () => child.kill('SIGTERM');
+    const stop = () => stopCli(child);
     signal.addEventListener('abort', stop, { once:true });
     if (signal.aborted) stop();
     child.stderr.on('data', data => { stderr = (stderr + data).slice(-4096); });
