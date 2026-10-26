@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {defaultConfig, resolveConfiguredModel} from '../src/config.mjs';
-import { parseCodex, parseAntigravity, codexArgs, runEvents, cleanEnvironment, runAntigravity, runClaude, toolMode, claudeUsage, codexUsage, antigravityUsage } from '../src/providers.mjs';
+import { parseCodex, parseAntigravity, codexArgs, runEvents, cleanEnvironment, runAntigravity, runClaude, runCodex, toolMode, claudeUsage, codexUsage, antigravityUsage } from '../src/providers.mjs';
 
 test('concrete model IDs are fixed while subscription follows the menu', () => {
   const config=defaultConfig();config.selectedModel='chatgpt/default';
@@ -138,4 +138,50 @@ test('CLI usage is mapped as reported, without estimates', () => {
   assert.deepEqual(antigravityUsage({input_tokens:9977,output_tokens:24,thinking_tokens:23,cache_read_tokens:0,total_tokens:10001}),
     {prompt_tokens:9977,completion_tokens:24,total_tokens:10001,completion_tokens_details:{reasoning_tokens:23}});
   for (const map of [claudeUsage, codexUsage, antigravityUsage]) { assert.equal(map(undefined), undefined); assert.equal(map({input_tokens:'5'}), undefined); }
+});
+
+function fakeCodex(t, reply) {
+  const dir=mkdtempSync(join(tmpdir(),'openbridge-codex-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const file=join(dir,'codex');
+  writeFileSync(file,`#!/usr/bin/env node
+import {readFileSync,existsSync} from 'node:fs';
+const args=process.argv.slice(2);let prompt='';
+process.stdin.on('data',d=>{prompt+=d;});
+process.stdin.on('end',()=>{
+  const schema=args.includes('--output-schema')&&existsSync('schema.json')?readFileSync('schema.json','utf8'):'none';
+  const text=${JSON.stringify(reply)}==='$SEEN'?JSON.stringify({seen:'schema='+schema+' prompt='+prompt.includes('valid JSON object')}):${JSON.stringify(reply)};
+  console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text}}));
+  console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:5,output_tokens:2}}));
+});
+`);
+  chmodSync(file,0o755);
+  return file;
+}
+test('Codex json_schema goes to --output-schema; json_object is asked for and validated', async t => {
+  const schema={type:'object',additionalProperties:false,required:['a'],properties:{a:{type:'integer'}}};
+  const emitted=[]; let usage;
+  const out=await runCodex([{role:'user',content:'hi'}],signal(),d=>emitted.push(d),{binary:fakeCodex(t,'{"a":1}'),responseFormat:{type:'json_schema',json_schema:{name:'x',schema}},onUsage:u=>{usage=u;}});
+  assert.equal(out,'{"a":1}');
+  assert.deepEqual(emitted,['{"a":1}']);
+  assert.equal(usage.total_tokens,7);
+  // The fixture echoes what it saw instead of answering, to prove the schema file and the instruction arrived.
+  const seen=await runCodex([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeCodex(t,'$SEEN'),responseFormat:{type:'json_schema',json_schema:{name:'x',schema}}});
+  assert.equal(JSON.parse(seen).seen,'schema='+JSON.stringify(schema)+' prompt=false');
+  assert.equal(JSON.parse(await runCodex([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeCodex(t,'$SEEN'),responseFormat:{type:'json_object'}})).seen,'schema=none prompt=true');
+  await assert.rejects(runCodex([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeCodex(t,'[1]'),responseFormat:{type:'json_object'}}),/valid structured output/);
+  assert.equal(await runCodex([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeCodex(t,'plain')}),'plain');
+});
+
+test('Codex turns a rejected schema into a readable 422', async t => {
+  const dir=mkdtempSync(join(tmpdir(),'openbridge-codex-schema-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const file=join(dir,'codex');
+  writeFileSync(file,`#!/usr/bin/env node
+process.stdin.resume();process.stdin.on('end',()=>{console.log(JSON.stringify({type:'turn.failed',error:{message:JSON.stringify({type:'error',error:{message:"Invalid schema: 'schema.additionalProperties' is required to be supplied and to be false when strict is true.",code:'invalid_json_schema'}})}}));});
+`);
+  chmodSync(file,0o755);
+  await assert.rejects(runCodex([{role:'user',content:'hi'}],signal(),()=>{},{binary:file,responseFormat:{type:'json_schema',json_schema:{name:'x',schema:{type:'object'}}}}),error=>{
+    assert.equal(error.status,422);
+    assert.match(error.message,/strict JSON schemas.*additionalProperties/);
+    return true;
+  });
 });

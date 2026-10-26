@@ -237,3 +237,25 @@ test('CLI token usage reaches the client in JSON, and in SSE only when include_u
   assert.deepEqual(chunks.at(-1).choices, []);
   assert.deepEqual(chunks.at(-1).usage, usage);
 });
+
+test('Codex accepts response_format but still refuses function calling', async t => {
+  const server = createBridge({ key:'test', runner: async () => '{"a":1}' });
+  await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const post = extra => fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, { method:'POST', headers:{ Authorization:'Bearer test' }, body:JSON.stringify({ model:'chatgpt/default', messages:[{ role:'user', content:'x' }], ...extra }) });
+  assert.equal((await post({ response_format:{ type:'json_object' } })).status, 200);
+  assert.equal((await post({ response_format:{ type:'json_schema', json_schema:{ name:'x', schema:{ type:'object', additionalProperties:false, required:[], properties:{} } } } })).status, 200);
+  assert.equal((await post({ tools:[{ type:'function', function:{ name:'f', parameters:{ type:'object' } } }] })).status, 422);
+});
+
+test('Codex refuses a non-strict json_schema at once, with the reason', async t => {
+  let ran = false;
+  const server = createBridge({ key:'test', runner: async () => { ran = true; return '{"a":1}'; } });
+  await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const post = schema => fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, { method:'POST', headers:{ Authorization:'Bearer test' }, body:JSON.stringify({ model:'chatgpt/default', messages:[{ role:'user', content:'x' }], response_format:{ type:'json_schema', json_schema:{ name:'x', schema } } }) });
+  const open = await post({ type:'object', required:['a'], properties:{ a:{ type:'string' } } });
+  assert.equal(open.status, 422); assert.match((await open.json()).error.message, /additionalProperties: false/);
+  const optional = await post({ type:'object', additionalProperties:false, required:['a'], properties:{ a:{ type:'string' }, b:{ type:'array', items:{ type:'object', additionalProperties:false, required:[], properties:{ c:{ type:'string' } } } } } });
+  assert.equal(optional.status, 422); assert.match((await optional.json()).error.message, /missing: b/);
+  assert.equal(ran, false);
+  assert.equal((await post({ type:'object', additionalProperties:false, required:['a'], properties:{ a:{ type:'string' } } })).status, 200);
+});

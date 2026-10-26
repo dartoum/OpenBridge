@@ -76,7 +76,10 @@ status (429 with Retry-After); 401/403/5xx stay 502, since 401 means the bridge 
 Clients execute API functions; never execute them in the bridge. Function
 calling on CLI adapters (Claude and Antigravity) is emulated through --json-schema (toolMode in src/providers.mjs): always
 buffered, always labelled with X-OpenBridge-Tools: emulated, never described as
-native. ChatGPT stays 422 for tools. CLI adapters normalize text arrays. Claude additionally maps response_format
+native. ChatGPT stays 422 for tools but takes response_format: json_schema goes to
+`codex exec --output-schema` (enforced by Codex; schemas must follow OpenAI's strict
+rules, checked up front by `strictSchemaProblem` because Codex retries instead of failing),
+json_object is prompt-based and validated. CLI adapters normalize text arrays. Claude additionally maps response_format
 json_schema to --json-schema; Claude and Antigravity validate json_object responses. Buffer
 structured replies, never stream unstructured preamble. Other unsupported
 controls/functions return 422. The only options a CLI route may drop are the

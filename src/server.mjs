@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { runProvider, toolMode } from './providers.mjs';
+import { runProvider, toolMode, strictSchemaProblem } from './providers.mjs';
 import { loadConfig, validateConfig, saveConfig, catalog, availableModels, resolveConfiguredModel, EFFORT_PATTERN } from './config.mjs';
 import { discoverModels } from './model-discovery.mjs';
 
@@ -43,8 +43,13 @@ export function validate(body) {
 function checkCliOptions(provider, body) {
   const allowed = new Set([...CLI_OPTIONS, ...IGNORED_ON_CLI]);
   const supportsStructured = provider.type === 'claude' || provider.type === 'antigravity';
-  if (supportsStructured || body.response_format?.type === 'text') allowed.add('response_format');
+  // Every CLI takes response_format; Claude and Antigravity also emulate function calling, Codex does not.
+  allowed.add('response_format');
   // agy cannot enforce a schema without its own tools: its --json-schema makes it loop on a `finish` tool the text-only profile lacks.
+  if (provider.type === 'codex' && body.response_format?.type === 'json_schema') {
+    const problem = strictSchemaProblem(body.response_format.json_schema.schema);
+    if (problem) throw httpError(422, `Codex only accepts strict JSON schemas (OpenAI structured-output rules): ${problem}`);
+  }
   if (provider.type === 'antigravity' && body.response_format?.type === 'json_schema') throw httpError(422, 'Antigravity supports response_format text and json_object, not json_schema');
   // Claude and Antigravity can emulate function calling (see toolMode); Codex cannot.
   const emulated = supportsStructured && body.tools?.length > 0;

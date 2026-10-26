@@ -71,7 +71,7 @@ export function toolMode({ tools, toolChoice, parallelToolCalls }) {
 export function runProvider(messages, signal, emit, id, { provider, modelSpec, options = {}, effort, tools, onModel, onUsage }) {
   const model = modelSpec.upstreamModel, binary = provider.cliPath;
   if (provider.type === 'claude') return runClaude(messages, signal, emit, { model, binary, responseFormat:options.response_format, effort, tools, onModel, onUsage });
-  if (provider.type === 'codex') return runCodex(messages, signal, emit, { model, binary, effort, onUsage });
+  if (provider.type === 'codex') return runCodex(messages, signal, emit, { model, binary, effort, responseFormat:options.response_format, onUsage });
   if (provider.type === 'antigravity') return runAntigravity(messages, signal, emit, { model, binary, responseFormat:options.response_format, effort, tools, onModel, onUsage });
   throw Error('Unsupported provider');
 }
@@ -186,7 +186,7 @@ export function runEvents({ binary, args, messages, signal, emit, parse, prepare
   });
 }
 
-export function codexArgs({ model = 'default', effort } = {}) {
+export function codexArgs({ model = 'default', effort, schemaFile } = {}) {
   const args = ['exec', '--ignore-user-config', '--ignore-rules', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '--json'];
   const config = { forced_login_method:'chatgpt', model_provider:'openai', web_search:'disabled', project_doc_max_bytes:0,
     'features.shell_tool':false, 'features.unified_exec':false, 'features.apps':false, 'features.plugins':false,
@@ -195,6 +195,7 @@ export function codexArgs({ model = 'default', effort } = {}) {
   if (effort) config.model_reasoning_effort = effort;
   for (const [k, v] of Object.entries(config)) args.push('-c', `${k}=${JSON.stringify(v)}`);
   if (model !== 'default') args.push('--model', model);
+  if (schemaFile) args.push('--output-schema', schemaFile);
   return args;
 }
 
@@ -204,12 +205,44 @@ export function parseCodex(event) {
   return { text:event.type === 'item.completed' && event.item?.type === 'agent_message' ? event.item.text : '', done:event.type === 'turn.completed' };
 }
 
-export function runCodex(messages, signal, emit, { model = 'default', binary = process.env.CODEX_BIN || join(homedir(), '.local/bin/codex'), effort, onUsage = () => {} } = {}) {
+// Codex enforces OpenAI's strict structured-output rules and, for a schema that breaks them, retries for minutes instead of
+// failing. So check up front: every object closed (additionalProperties false) with all properties required.
+export function strictSchemaProblem(schema, path = 'schema') {
+  if (!schema || typeof schema !== 'object') return undefined;
+  if (schema.type === 'object' || schema.properties) {
+    const keys = Object.keys(schema.properties || {});
+    if (schema.additionalProperties !== false) return `${path} needs additionalProperties: false`;
+    const missing = keys.filter(key => !(schema.required || []).includes(key));
+    if (missing.length) return `${path} must list every property as required (missing: ${missing.join(', ')}); use a nullable type instead of an optional one`;
+  }
+  const children = [...Object.entries(schema.properties || {}).map(([key, value]) => [`${path}.${key}`, value]), [`${path}[]`, schema.items],
+    ...['anyOf', 'oneOf', 'allOf'].flatMap(name => (schema[name] || []).map((value, i) => [`${path}.${name}[${i}]`, value])),
+    ...Object.entries({ ...schema.$defs, ...schema.definitions }).map(([key, value]) => [`${path}.$defs.${key}`, value])];
+  for (const [childPath, child] of children) { const problem = strictSchemaProblem(child, childPath); if (problem) return problem; }
+  return undefined;
+}
+
+export async function runCodex(messages, signal, emit, { model = 'default', binary = process.env.CODEX_BIN || join(homedir(), '.local/bin/codex'), effort, responseFormat, onUsage = () => {} } = {}) {
+  const structured = responseFormat && responseFormat.type !== 'text';
+  const schema = responseFormat?.type === 'json_schema' ? responseFormat.json_schema.schema : undefined;
   const parse = event => {
     if (event.type === 'turn.completed') { const usage = codexUsage(event.usage); if (usage) onUsage(usage); }
     return parseCodex(event);
   };
-  return runEvents({ binary, args:codexArgs({ model, effort }), messages, signal, emit, parse });
+  // json_schema is enforced by Codex itself (--output-schema, strict: it rejects a schema without additionalProperties:false).
+  const prompt = responseFormat?.type === 'json_object' ? [...messages, { role:'system', content:JSON_OBJECT_INSTRUCTION }] : messages;
+  const raw = await runEvents({ binary, args:codexArgs({ model, effort, schemaFile:schema ? 'schema.json' : undefined }), messages:prompt, signal, parse,
+    emit: delta => { if (!structured) emit(delta); },
+    prepare: schema ? cwd => writeFileSync(join(cwd, 'schema.json'), JSON.stringify(schema)) : undefined })
+    .catch(error => {
+      // Codex applies OpenAI's strict structured-output rules; say so instead of showing a raw API error blob.
+      if (schema && /invalid_json_schema/.test(error.message)) {
+        const detail = error.message.match(/"message":"([^"]*)"/)?.[1] || 'the schema was rejected';
+        throw Object.assign(Error(`Codex only accepts strict JSON schemas (OpenAI structured-output rules: additionalProperties false, every property required): ${detail}`), { status:422 });
+      }
+      throw error;
+    });
+  return structured ? structuredOutput(raw, responseFormat, emit, 'Codex') : raw;
 }
 
 export function parseAntigravity(event) {
@@ -225,6 +258,21 @@ export function parseAntigravity(event) {
     return { done:true, final:event.result.response || '' };
   }
   return {};
+}
+
+const JSON_OBJECT_INSTRUCTION = 'Return only a valid JSON object, without markdown fences or commentary.';
+
+// A structured reply is buffered, parsed and re-serialised; anything that is not the promised JSON is an error.
+function structuredOutput(raw, responseFormat, emit, who) {
+  try {
+    const parsed = JSON.parse(cleanMarkdownFences(raw));
+    if (parsed === undefined || (responseFormat.type === 'json_object' && (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)))) throw Error('Missing JSON output');
+    const output = JSON.stringify(parsed);
+    emit(output);
+    return output;
+  } catch {
+    throw Error(`${who} did not return valid structured output`);
+  }
 }
 
 function cleanMarkdownFences(text) {
@@ -246,7 +294,7 @@ export async function runAntigravity(messages, signal, emit, { model, binary = p
 
   let prompt = conversationPrompt(messages);
   if (tools) prompt += tools.prompt;
-  else if (responseFormat?.type === 'json_object') prompt += '\nReturn only a valid JSON object, without markdown fences or commentary.';
+  else if (responseFormat?.type === 'json_object') prompt += '\n' + JSON_OBJECT_INSTRUCTION;
 
   // The prompt goes in on stdin: as a -p argument it was capped at 96 KiB. (-p cannot be combined with stdin input.)
   const input = JSON.stringify({ event:'user', message:{ content:prompt } }) + '\n';
@@ -281,17 +329,7 @@ export async function runAntigravity(messages, signal, emit, { model, binary = p
     throw Error('Antigravity did not return a valid function call');
   }
 
-  if (structured) {
-    try {
-      const parsed = JSON.parse(cleanMarkdownFences(answer));
-      if (parsed === undefined || (responseFormat.type === 'json_object' && (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)))) throw Error('Missing JSON output');
-      const output = JSON.stringify(parsed);
-      emit(output);
-      return output;
-    } catch {
-      throw Error('Antigravity did not return valid structured output');
-    }
-  }
+  if (structured) return structuredOutput(answer, responseFormat, emit, 'Antigravity');
 
   return rawResult;
 }
