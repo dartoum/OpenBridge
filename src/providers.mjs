@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
+import { schemaProblem } from './json-schema.mjs';
 
 // CLI routes use the account login only: strip every API-key, token and provider-switch variable.
 const CREDENTIAL_VARIABLES = /^(ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDECODE$|OPENAI_|CODEX_API_KEY$|CODEX_ACCESS_TOKEN$|GEMINI_API_KEY$|GOOGLE_API_KEY$|GOOGLE_APPLICATION_CREDENTIALS$|GOOGLE_GENAI_USE_|COMMAND_CODE_API_KEY$|BRIDGE_API_KEY$)/;
@@ -263,16 +264,20 @@ export function parseAntigravity(event) {
 const JSON_OBJECT_INSTRUCTION = 'Return only a valid JSON object, without markdown fences or commentary.';
 
 // A structured reply is buffered, parsed and re-serialised; anything that is not the promised JSON is an error.
-function structuredOutput(raw, responseFormat, emit, who) {
+// `checkSchema` is for CLIs that cannot enforce json_schema themselves: the bridge validates the reply against it.
+function structuredOutput(raw, responseFormat, emit, who, checkSchema) {
+  let parsed;
   try {
-    const parsed = JSON.parse(cleanMarkdownFences(raw));
+    parsed = JSON.parse(cleanMarkdownFences(raw));
     if (parsed === undefined || (responseFormat.type === 'json_object' && (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)))) throw Error('Missing JSON output');
-    const output = JSON.stringify(parsed);
-    emit(output);
-    return output;
   } catch {
     throw Error(`${who} did not return valid structured output`);
   }
+  const problem = checkSchema ? schemaProblem(checkSchema, parsed) : undefined;
+  if (problem) throw Error(`${who} returned JSON that does not match the schema: ${problem}`);
+  const output = JSON.stringify(parsed);
+  emit(output);
+  return output;
 }
 
 function cleanMarkdownFences(text) {
@@ -295,6 +300,9 @@ export async function runAntigravity(messages, signal, emit, { model, binary = p
   let prompt = conversationPrompt(messages);
   if (tools) prompt += tools.prompt;
   else if (responseFormat?.type === 'json_object') prompt += '\n' + JSON_OBJECT_INSTRUCTION;
+  // agy cannot enforce a schema (see AGENTS.md), so the schema goes into the prompt and the reply is validated.
+  const schema = responseFormat?.type === 'json_schema' ? responseFormat.json_schema.schema : undefined;
+  if (schema) prompt += `\nReply only with one JSON value that conforms to this JSON Schema, without markdown fences or commentary:\n${JSON.stringify(schema)}`;
 
   // The prompt goes in on stdin: as a -p argument it was capped at 96 KiB. (-p cannot be combined with stdin input.)
   const input = JSON.stringify({ event:'user', message:{ content:prompt } }) + '\n';
@@ -329,7 +337,7 @@ export async function runAntigravity(messages, signal, emit, { model, binary = p
     throw Error('Antigravity did not return a valid function call');
   }
 
-  if (structured) return structuredOutput(answer, responseFormat, emit, 'Antigravity');
+  if (structured) return structuredOutput(answer, responseFormat, emit, 'Antigravity', schema);
 
   return rawResult;
 }

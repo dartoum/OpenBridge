@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {defaultConfig, resolveConfiguredModel} from '../src/config.mjs';
+import { schemaProblem, unsupportedKeyword } from '../src/json-schema.mjs';
 import { parseCodex, parseAntigravity, codexArgs, runEvents, cleanEnvironment, runAntigravity, runClaude, runCodex, toolMode, claudeUsage, codexUsage, antigravityUsage } from '../src/providers.mjs';
 
 test('concrete model IDs are fixed while subscription follows the menu', () => {
@@ -184,4 +185,27 @@ process.stdin.resume();process.stdin.on('end',()=>{console.log(JSON.stringify({t
     assert.match(error.message,/strict JSON schemas.*additionalProperties/);
     return true;
   });
+});
+
+test('the schema checker covers what generated schemas use and refuses the rest', () => {
+  const schema={type:'object',additionalProperties:false,required:['a','b'],properties:{a:{type:'integer',minimum:1},b:{anyOf:[{type:'null'},{type:'array',items:{$ref:'#/$defs/x'}}]}},$defs:{x:{enum:['p','q']}}};
+  assert.equal(schemaProblem(schema,{a:1,b:['p']}),undefined);
+  assert.equal(schemaProblem(schema,{a:1,b:null}),undefined);
+  assert.match(schemaProblem(schema,{a:0,b:null}),/value\.a is below 1/);
+  assert.match(schemaProblem(schema,{a:1,b:['z']}),/matches none/);
+  assert.match(schemaProblem(schema,{a:1}),/b is missing/);
+  assert.match(schemaProblem(schema,{a:1,b:null,c:1}),/c is not allowed/);
+  assert.match(schemaProblem(schema,{a:1.5,b:null}),/integer/);
+  assert.equal(unsupportedKeyword(schema),undefined);
+  assert.match(unsupportedKeyword({type:'object',properties:{x:{not:{}}}}),/schema\.x uses "not"/);
+  assert.match(unsupportedKeyword({$ref:'https://example.com/s'}),/\$ref/);
+});
+test('Antigravity puts the schema in the prompt and validates the reply against it', async t => {
+  const schema={type:'object',additionalProperties:false,required:['a'],properties:{a:{type:'integer'}}};
+  const format={type:'json_schema',json_schema:{name:'x',schema}};
+  const emitted=[];
+  assert.equal(await runAntigravity([{role:'user',content:'hi'}],signal(),d=>emitted.push(d),{binary:fakeAgy(t,'```json\n{"a": 2}\n```'),responseFormat:format}),'{"a":2}');
+  assert.deepEqual(emitted,['{"a":2}']);
+  await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgy(t,'{"a":"two"}'),responseFormat:format}),/does not match the schema: value\.a should be integer/);
+  await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgy(t,'not json'),responseFormat:format}),/valid structured output/);
 });

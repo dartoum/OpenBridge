@@ -56,7 +56,9 @@ prompt goes in on stdin (`--input-format stream-json`, message
 `{"event":"user","message":{"content":…}}`), not as an argument. Never pass
 `--json-schema`: without agy's own tools it loops on a missing `finish` tool.
 Tool calling and `json_object` are therefore prompt-based and validated by the
-bridge (tools labelled `X-OpenBridge-Tools: emulated`); `json_schema` is 422.
+bridge (tools labelled `X-OpenBridge-Tools: emulated`). `json_schema` puts the
+schema in the prompt and src/json-schema.mjs validates the reply; a schema
+using a keyword that checker lacks is 422, never silently unchecked.
 
 ## Verification
 
@@ -80,7 +82,7 @@ native. ChatGPT stays 422 for tools but takes response_format: json_schema goes 
 `codex exec --output-schema` (enforced by Codex; schemas must follow OpenAI's strict
 rules, checked up front by `strictSchemaProblem` because Codex retries instead of failing),
 json_object is prompt-based and validated. CLI adapters normalize text arrays. Claude additionally maps response_format
-json_schema to --json-schema; Claude and Antigravity validate json_object responses. Buffer
+json_schema to --json-schema (Codex: --output-schema; Antigravity: prompt plus bridge validation); json_object is validated on every CLI. Buffer
 structured replies, never stream unstructured preamble. Other unsupported
 controls/functions return 422. The only options a CLI route may drop are the
 harmless length/sampling ones (`IGNORED_ON_CLI` in src/server.mjs), and then
