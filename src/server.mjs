@@ -121,7 +121,7 @@ async function forwardChat({ provider, spec, body, apiKey, signal, res, event })
   res.end();
 }
 
-export function createBridge({ key, adminKey = key, runner = runProvider, timeout = 120000, queueTimeout = 30000, model, configPath, config:suppliedConfig } = {}) {
+export function createBridge({ key, adminKey = key, runner = runProvider, timeout = 120000, queueTimeout = 30000, keepAlive = 15000, model, configPath, config:suppliedConfig } = {}) {
   if (!key || !adminKey) throw Error('Bridge and management keys required');
   let config = validateConfig(structuredClone(suppliedConfig || loadConfig(configPath)));
   if (model) config.selectedModel = resolveConfiguredModel(config, model)?.id || config.selectedModel;
@@ -233,6 +233,10 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
       if (!res.destroyed) res.write(`data: ${JSON.stringify(value)}\n\n`);
     };
     const chunk = (delta, finish_reason = null) => event({ id, object:'chat.completion.chunk', created, model:spec.id, choices:[{ index:0, delta, finish_reason }] });
+    const startStream = () => { if (!res.headersSent) res.writeHead(200, { 'Content-Type':'text/event-stream', 'Cache-Control':'no-cache', ...extraHeaders }); };
+    // Tool calls and structured output are buffered; an SSE comment keeps client and proxies from timing out meanwhile.
+    const buffered = provider.type !== 'openai' && body.stream && (tools || (body.response_format && body.response_format.type !== 'text'));
+    const keepAliveTimer = buffered ? setInterval(() => { if (!res.destroyed) { startStream(); res.write(': keepalive\n\n'); } }, keepAlive) : null;
     const record = success => ({ success, at:new Date().toISOString(), durationMs:Date.now() - started, ...(effort ? { effort } : {}), ...(resolvedModel ? { resolvedModel } : {}) });
     try {
       if (provider.type === 'openai') {
@@ -243,7 +247,7 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
           text += delta;
           if (text.length > 2 * 1024 * 1024) { controller.abort(); return; }
           if (!body.stream || res.destroyed) return;
-          if (!streaming) { res.writeHead(200, { 'Content-Type':'text/event-stream', 'Cache-Control':'no-cache', ...extraHeaders }); streaming = true; chunk({ role:'assistant' }); }
+          if (!streaming) { startStream(); streaming = true; chunk({ role:'assistant' }); }
           chunk({ content:delta });
         }, spec.id, { provider, modelSpec:spec, options:body, effort, tools, onModel:value => { resolvedModel = value; } });
         if (result && typeof result === 'object') {
@@ -251,14 +255,14 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
           const calls = result.tool_calls.map(call => ({ id:`call_${randomUUID().replaceAll('-', '').slice(0, 24)}`, type:'function', function:{ name:call.name, arguments:JSON.stringify(call.arguments) } }));
           const finish = calls.length ? 'tool_calls' : 'stop';
           if (body.stream) {
-            res.writeHead(200, { 'Content-Type':'text/event-stream', 'Cache-Control':'no-cache', ...extraHeaders });
+            startStream();
             chunk({ role:'assistant', ...(result.content ? { content:result.content } : {}) });
             if (calls.length) chunk({ tool_calls:calls.map((call, index) => ({ index, ...call })) });
             chunk({}, finish);
             res.end('data: [DONE]\n\n');
           } else sendJSON(res, 200, { id, object:'chat.completion', created, model:spec.id, choices:[{ index:0, message:{ role:'assistant', content:result.content ?? null, ...(calls.length ? { tool_calls:calls } : {}) }, finish_reason:finish }] }, extraHeaders);
         } else if (body.stream) {
-          if (!streaming) { res.writeHead(200, { 'Content-Type':'text/event-stream', ...extraHeaders }); chunk({ role:'assistant', content:result }); }
+          if (!streaming) { startStream(); chunk({ role:'assistant', content:result }); }
           chunk({}, 'stop');
           res.end('data: [DONE]\n\n');
         } else sendJSON(res, 200, { id, object:'chat.completion', created, model:spec.id, choices:[{ index:0, message:{ role:'assistant', content:result }, finish_reason:'stop' }] }, extraHeaders);
@@ -268,10 +272,10 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
     } catch (e) {
       stats.failed++;
       checks[spec.id] = { ...record(false), message:e.message };
-      if (streaming && res.headersSent) { event({ error:{ message:e.message, type:'bridge_error' } }); res.end(); }
+      if (res.headersSent) { event({ error:{ message:e.message, type:'bridge_error' } }); res.end(); }
       else sendError(res, controller.signal.aborted ? 504 : 502, e.message);
     } finally {
-      clearTimeout(timer);
+      clearTimeout(timer); clearInterval(keepAliveTimer);
       activeModel = null; currentController = undefined;
       stats.lastDurationMs = Date.now() - started;
       release();

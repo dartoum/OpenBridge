@@ -191,3 +191,16 @@ test('a second request waits for its turn, and gets 429 with Retry-After only af
   assert.equal(refused.status, 429);
   assert.ok(Number(refused.headers.get('retry-after')) >= 1);
 });
+
+test('buffered streaming replies send SSE keepalive comments while the CLI works', async t => {
+  const tool = { type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } };
+  const server = createBridge({ key: 'test', keepAlive: 20, runner: async () => { await new Promise(r => setTimeout(r, 150)); return { content: null, tool_calls: [{ name: 'lookup', arguments: {} }] }; } });
+  await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, { method: 'POST', headers: { Authorization: 'Bearer test' }, body: JSON.stringify({ model: 'claude-subscription', stream: true, tools: [tool], messages: [{ role: 'user', content: 'x' }] }) });
+  const text = await response.text();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-openbridge-tools'), 'emulated');
+  assert.ok((text.match(/: keepalive/g) || []).length >= 2);
+  assert.match(text, /"tool_calls"/);
+  assert.match(text, /\[DONE\]/);
+});
