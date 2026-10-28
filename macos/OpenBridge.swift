@@ -352,6 +352,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
     func model(_ id: String) -> ModelRecord? { snapshot?.config.providers.lazy.flatMap(\.models).first { $0.id == id } }
     func setEffort(_ id: String, _ effort: String?) { updateModel(id) { $0.effort = effort } }
+    func addSubscription(_ candidate: SubscriptionCandidate, customPath: String? = nil, completion: @escaping (String?) -> Void = { _ in }) {
+        let path = customPath ?? candidate.path
+        let models: [ModelRecord]
+        // The same starting models as defaultConfig in src/config.mjs; Fetch models adds the rest, switched off.
+        switch candidate.type {
+        case "claude":
+            models = [
+                ModelRecord(id: "claude/sonnet", upstreamModel: "sonnet", name: "Sonnet", enabled: true),
+                ModelRecord(id: "claude/opus", upstreamModel: "opus", name: "Opus", enabled: true),
+                ModelRecord(id: "claude/haiku", upstreamModel: "haiku", name: "Haiku", enabled: true)
+            ]
+        case "codex":
+            models = [
+                ModelRecord(id: "chatgpt/default", upstreamModel: "default", name: "Codex · default model", enabled: true)
+            ]
+        case "antigravity":
+            models = [
+                ModelRecord(id: "google/gemini-3.8-flash-medium", upstreamModel: "gemini-3.8-flash-medium", name: "Gemini 3.8 Flash (Medium)", enabled: true),
+                ModelRecord(id: "google/gemini-4-argon-medium", upstreamModel: "gemini-4-argon-medium", name: "Gemini 4 Argon (Medium)", enabled: true)
+            ]
+        default:
+            completion("OpenBridge has no adapter for \(candidate.name).")
+            return
+        }
+        let record = ProviderRecord(id: candidate.id, name: candidate.name, type: candidate.type, enabled: true, cliPath: path, baseURL: "", models: models)
+        updateConfig({ config in
+            if let index = config.providers.firstIndex(where: { $0.id == candidate.id }) {
+                config.providers[index].enabled = true
+                config.providers[index].cliPath = path
+            } else {
+                config.providers.append(record)
+            }
+            if !config.providers.contains(where: { $0.enabled && $0.models.contains(where: { $0.enabled && $0.id == config.selectedModel }) }) {
+                if let first = models.first { config.selectedModel = first.id }
+            }
+        }, onError: { completion($0) }, onSuccess: {
+            self.requestedSelection = candidate.id
+            self.refreshChecks()
+            self.discover(candidate.id)
+            completion(nil)
+        })
+    }
     func addProvider(_ provider: ProviderRecord, secret: String, completion: @escaping (String?) -> Void) {
         let loaded = { self.requestedSelection = provider.id; self.discover(provider.id) }
         updateConfig({ $0.providers.append(provider) }, onError: { completion($0) }, onSuccess: {
@@ -364,19 +406,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         return entry.alias ? displayName(model, in: provider) + " · Automatic" : displayName(model, in: provider)
     }
     // One flat list in catalogue order (family, then newest version first), all models shown. A long list (an
-    // endpoint with hundreds of models) shows only enabled models until you search.
-    func modelList(_ provider: ProviderRecord, search: String) -> (shown: [ModelRecord], hidden: Int) {
-        let entries = (snapshot?.models ?? []).filter { $0.providerID == provider.id }
-        let withVersions = Set(entries.filter { !$0.alias }.map(\.family))
-        var shown: [ModelRecord] = [], hidden = 0
-        let long = search.isEmpty && entries.count > 40
+    // endpoint with hundreds of models) shows only enabled models until you search. Capped at 50 during search for instant 60fps responsiveness.
+    func modelList(_ provider: ProviderRecord, search: String) -> (shown: [(model: ModelRecord, isAlias: Bool)], hidden: Int) {
+        let snapshotList = (snapshot?.models ?? []).filter { $0.providerID == provider.id }
+        let entries = snapshotList.isEmpty ? provider.models.map { CatalogEntry(id: $0.id, name: $0.name, enabled: $0.enabled, providerID: provider.id, family: "", familyName: "", version: "", alias: false) } : snapshotList
+        let modelMap = Dictionary(provider.models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var shown: [(model: ModelRecord, isAlias: Bool)] = [], hidden = 0
+        let long = query.isEmpty && entries.count > 40
+        let maxSearchItems = 50
+
         for entry in entries {
-            guard let model = provider.models.first(where: { $0.id == entry.id }) else { continue }
-            if !search.isEmpty && !(model.name + " " + model.id).localizedCaseInsensitiveContains(search) { continue }
-            // Shortcut IDs (claude/sonnet) live under Advanced unless their family has nothing else.
-            if entry.alias && withVersions.contains(entry.family) { continue }
-            if long && !model.enabled { hidden += 1; continue }
-            shown.append(model)
+            guard let model = modelMap[entry.id] else { continue }
+            if !query.isEmpty {
+                let match = model.id.lowercased().contains(query) || model.name.lowercased().contains(query)
+                if !match { continue }
+                if shown.count < maxSearchItems {
+                    shown.append((model: model, isAlias: entry.alias))
+                } else {
+                    hidden += 1
+                }
+            } else {
+                if long && !model.enabled {
+                    hidden += 1
+                    continue
+                }
+                shown.append((model: model, isAlias: entry.alias))
+            }
         }
         return (shown, hidden)
     }

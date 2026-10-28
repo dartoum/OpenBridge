@@ -14,9 +14,9 @@ test('configuration persists without credentials and rejects unsafe or duplicate
   assert.deepEqual(loadConfig(path),config);
   assert.equal(readFileSync(path,'utf8').includes('API_KEY'),false);
   const duplicate=structuredClone(config);duplicate.providers[0].models.push(duplicate.providers[0].models[0]);assert.throws(()=>validateConfig(duplicate),/duplicate/);
-  const secret=structuredClone(config);secret.providers[3].apiKey='no';assert.throws(()=>validateConfig(secret),/credentials/);
-  const unsafe=structuredClone(config);unsafe.providers[3].baseURL='http://example.com/v1';assert.throws(()=>validateConfig(unsafe),/HTTPS/);
-  unsafe.providers[3].baseURL='https://name:password@example.com/v1';assert.throws(()=>validateConfig(unsafe),/credentials/);
+  const secret=structuredClone(config);secret.providers.push({id:'custom',name:'C',type:'openai',enabled:true,cliPath:'',baseURL:'https://api.example.com/v1',models:[],apiKey:'no'});assert.throws(()=>validateConfig(secret),/credentials/);
+  const unsafe=structuredClone(config);unsafe.providers.push({id:'custom',name:'C',type:'openai',enabled:true,cliPath:'',baseURL:'http://example.com/v1',models:[]});assert.throws(()=>validateConfig(unsafe),/HTTPS/);
+  unsafe.providers[unsafe.providers.length-1].baseURL='https://name:password@example.com/v1';assert.throws(()=>validateConfig(unsafe),/credentials/);
 });
 
 test('disabled models and providers disappear from catalog and direct requests are refused', async t=>{
@@ -66,10 +66,10 @@ test('oversized requests return HTTP 413 without resetting the connection',async
 
 test('a provider may list up to 1000 models', () => {
   const config=defaultConfig();
-  const many=count=>Array.from({length:count},(_,i)=>({id:`commandcode/m${i}`,upstreamModel:`m${i}`,name:`M${i}`,enabled:false}));
-  config.providers[3].models.push(...many(999));
+  const many=count=>Array.from({length:count},(_,i)=>({id:`claude/m${i}`,upstreamModel:`m${i}`,name:`M${i}`,enabled:false}));
+  config.providers[0].models.push(...many(997));
   assert.doesNotThrow(()=>validateConfig(config));
-  config.providers[3].models.push(...many(5).map((m,i)=>({...m,id:`commandcode/x${i}`,upstreamModel:`x${i}`})));
+  config.providers[0].models.push(...many(5).map((m,i)=>({...m,id:`claude/x${i}`,upstreamModel:`x${i}`})));
   assert.throws(()=>validateConfig(config),/Invalid provider/);
 });
 
@@ -91,8 +91,8 @@ test('removing a provider drops its configuration, models, check results and key
 
 test('subscription providers always carry their CLI name', () => {
   const config=defaultConfig();
-  assert.deepEqual(config.providers.slice(0,3).map(p=>p.name),['Claude Code','Codex','Antigravity']);
-  config.providers[0].name='Claude Pro';config.providers[1].name='ChatGPT';config.providers[3].name='My Command Code';
+  assert.deepEqual(config.providers.map(p=>p.name),['Claude Code','Codex','Antigravity']);
+  config.providers[0].name='Claude Pro';config.providers[1].name='ChatGPT';
   validateConfig(config);
-  assert.deepEqual(config.providers.map(p=>p.name),['Claude Code','Codex','Antigravity','My Command Code']);
+  assert.deepEqual(config.providers.map(p=>p.name),['Claude Code','Codex','Antigravity']);
 });

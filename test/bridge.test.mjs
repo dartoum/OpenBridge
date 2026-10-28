@@ -104,7 +104,8 @@ test('provider routing and Command Code settings require auth and never expose k
     res.end(JSON.stringify({ model:JSON.parse(raw).model, choices:[{ index:0, message:{ role:'assistant', content:'ok' }, finish_reason:'stop' }] }));
   });
   await new Promise(r=>upstream.listen(0,'127.0.0.1',r)); t.after(()=>upstream.close());
-  const config = defaultConfig(); config.providers[3].baseURL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  const config = defaultConfig();
+  config.providers.push({ id:'commandcode', name:'Command Code GOAT', type:'openai', enabled:true, cliPath:'', baseURL:`http://127.0.0.1:${upstream.address().port}/v1`, models:[{ id:'commandcode/deepseek/deepseek-v4-flash', upstreamModel:'deepseek/deepseek-v4-flash', name:'DeepSeek V4 Flash', enabled:true }] });
   const server = createBridge({ key:'test', model:'sonnet', config, runner: async (m,s,e,model,settings)=>{ captured={model,settings}; return model; } });
   await new Promise(r=>server.listen(0,'127.0.0.1',r)); t.after(()=>server.close());
   const base=`http://127.0.0.1:${server.address().port}`;
@@ -210,7 +211,8 @@ test('buffered streaming replies send SSE keepalive comments while the CLI works
 test('upstream statuses the client can act on pass through; others stay 502', async t => {
   const upstream = http.createServer();
   await new Promise(r => upstream.listen(0, '127.0.0.1', r)); t.after(() => upstream.close());
-  const config = defaultConfig(); config.providers[3].baseURL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  const config = defaultConfig();
+  config.providers.push({ id:'commandcode', name:'Command Code GOAT', type:'openai', enabled:true, cliPath:'', baseURL:`http://127.0.0.1:${upstream.address().port}/v1`, models:[{ id:'commandcode/deepseek/deepseek-v4-flash', upstreamModel:'deepseek/deepseek-v4-flash', name:'DeepSeek V4 Flash', enabled:true }] });
   const server = createBridge({ key:'test', config });
   await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
   const base = `http://127.0.0.1:${server.address().port}`, headers = { Authorization:'Bearer test' };

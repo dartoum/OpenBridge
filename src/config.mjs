@@ -19,7 +19,6 @@ export function defaultConfig() {
     { id:'claude', name:'Claude Code', type:'claude', enabled:true, cliPath:process.env.CLAUDE_BIN || join(homedir(),'.local/bin/claude'), baseURL:'', models:[model('claude','sonnet','Sonnet'),model('claude','opus','Opus'),model('claude','haiku','Haiku')] },
     { id:'chatgpt', name:'Codex', type:'codex', enabled:true, cliPath:process.env.CODEX_BIN || join(homedir(),'.local/bin/codex'), baseURL:'', models:[model('chatgpt','default','Codex · default model')] },
     { id:'google', name:'Antigravity', type:'antigravity', enabled:true, cliPath:process.env.AGY_BIN || join(homedir(),'.local/bin/agy'), baseURL:'', models:[model('google','gemini-3.8-flash-medium','Gemini 3.8 Flash (Medium)'),model('google','gemini-4-argon-medium','Gemini 4 Argon (Medium)')] },
-    { id:'commandcode', name:'Command Code GOAT', type:'openai', enabled:true, cliPath:'', baseURL:'https://api.commandcode.ai/provider/v1', models:[model('commandcode','deepseek/deepseek-v4-flash','DeepSeek V4 Flash')] },
   ] };
 }
 

@@ -63,8 +63,31 @@ struct CLIStatus: Equatable {
             if let login = run(path, ["login", "status"], timeout: 7) { let value = codexLogin(from: login.output); status.loggedIn = value.loggedIn; status.auth = value.text }
         default:
             if let login = run(path, ["models"], timeout: 15) { let value = antigravityLogin(code: login.code, output: login.output); status.loggedIn = value.loggedIn; status.auth = value.text }
-            status.detail = "Text-only isolation is currently blocked, so requests through this CLI fail even when signed in."
         }
         return status
     }
+
+    // The CLIs the bridge has an adapter for, as the scan sheet offers them (id and name match defaultConfig).
+    static let supportedSubscriptions: [(id: String, type: String, name: String)] = [
+        ("claude", "claude", "Claude Code"),
+        ("chatgpt", "codex", "Codex"),
+        ("google", "antigravity", "Antigravity")
+    ]
+
+    // `paths` gives each type's usual install locations (AppDelegate.cliCandidates); the first executable one wins.
+    static func scanAllSubscriptions(paths: [String: [String]]) -> [SubscriptionCandidate] {
+        supportedSubscriptions.map { sub in
+            let candidates = paths[sub.type] ?? []
+            let path = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) ?? candidates.first ?? ""
+            return SubscriptionCandidate(id: sub.id, type: sub.type, name: sub.name, path: path, status: check(type: sub.type, path: path))
+        }
+    }
+}
+
+struct SubscriptionCandidate: Equatable, Identifiable {
+    var id: String
+    var type: String
+    var name: String
+    var path: String
+    var status: CLIStatus
 }
