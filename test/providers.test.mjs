@@ -59,16 +59,53 @@ function fakeAgy(t, response) {
   return file;
 }
 const signal=()=>AbortSignal.timeout(5000);
-test('Antigravity emulates function calling and unwraps a fenced JSON reply', async t => {
-  const tools=toolMode({tools:[{type:'function',function:{name:'lookup',parameters:{type:'object'}}}]});
+// A fake agy that records its workspace (profile, plugin, prompt) and reports call_mcp_tool steps as agy does (ACTIVE,
+// then ERROR), with the long argument shortened to "…" in the event. With permission (the default) it delivers the full
+// call to the MCP server's capture file first; `denied` mimics agy refusing without the permission rule.
+function fakeAgyTools(t, calls, after = [], { denied = false } = {}) {
+  const dir=mkdtempSync(join(tmpdir(),'openbridge-agy-tools-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const file=join(dir,'agy');
+  const step=(i,server,tool,args,state)=>({event:'step_update',step_update:{step_index:i+2,state,step_type:'tool',tool_name:server==='other-tool'?'run_command':'call_mcp_tool',
+    ...(state==='ERROR'&&denied?{error:{message:'permission check failed for mcp: user denied permission'}}:{}),tool_info:{name:'call_mcp_tool',parameters:{ServerName:server,ToolName:tool,Arguments:JSON.stringify(args).slice(0,8)+' …'}}}});
+  writeFileSync(file,`#!/usr/bin/env node
+const fs=require('node:fs');let s='';process.stdin.on('data',d=>{s+=d;if(!s.includes('\\n'))return;
+const plugin=JSON.parse(fs.readFileSync('.agents/plugins/openbridge/mcp_config.json','utf8'));
+fs.writeFileSync(${JSON.stringify(dir)}+'/seen.json',JSON.stringify({prompt:JSON.parse(s).message.content,profile:fs.readFileSync('.agents/agents/openbridge-text.md','utf8'),plugin,tools:JSON.parse(fs.readFileSync('tools.json','utf8'))}));
+const out=e=>console.log(JSON.stringify(e)),calls=${JSON.stringify(calls)},step=${step.toString()},denied=${denied};
+out({event:'init',init:{model:'fixture-model'}});out({event:'step_update',step_update:{step_type:'agent_response',text_delta:'On it.'}});
+calls.forEach(([server,tool,args],i)=>{out(step(i,server,tool,args,'ACTIVE'));if(server==='openbridge_c'&&!denied)fs.appendFileSync(plugin.mcpServers.c.args[2],JSON.stringify({name:tool,arguments:args})+'\\n');out(step(i,server,tool,args,'ERROR'));});
+for(const l of ${JSON.stringify(after)})out(l);setInterval(()=>{},1000);});
+`);
+  chmodSync(file,0o755);
+  return { file, seen:()=>JSON.parse(readFileSync(join(dir,'seen.json'),'utf8')) };
+}
+test('Antigravity offers the functions through a workspace plugin and takes the full calls from the capture file', async t => {
+  const tools=toolMode({tools:[{type:'function',function:{name:'lookup',description:'Find',parameters:{type:'object'}}}]});
   let model;
-  const result=await runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgy(t,'```json\n{"content":null,"tool_calls":[{"name":"lookup","arguments":{"q":"x"}}]}\n```'),tools,onModel:m=>{model=m;}});
-  assert.deepEqual(result,{content:null,tool_calls:[{name:'lookup',arguments:{q:'x'}}]});
+  const long='x'.repeat(5000);
+  const agy=fakeAgyTools(t,[['openbridge_c','lookup',{q:long}],['openbridge_c','lookup',{q:'y'}]],[{event:'step_update',step_update:{step_type:'agent_response',text_delta:'It failed.'}}]);
+  const started=Date.now();
+  const result=await runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:agy.file,tools,onModel:m=>{model=m;}});
+  assert.deepEqual(result,{content:'On it.',tool_calls:[{name:'lookup',arguments:{q:long}},{name:'lookup',arguments:{q:'y'}}]});
+  assert.ok(Date.now()-started<900,'a following step ends the collection at once');
   assert.equal(model,'fixture-model');
+  const seen=agy.seen();
+  assert.match(seen.profile,/plugins: \[openbridge\]/);
+  assert.match(seen.profile,/mcpServers: \[\]/);
+  assert.match(seen.plugin.mcpServers.c.args[0],/tool-mcp\.mjs$/);
+  assert.match(seen.plugin.mcpServers.c.args[2],/calls\.jsonl$/);
+  assert.deepEqual(seen.tools,tools.mcp);
+  assert.match(seen.prompt,/call_mcp_tool: ServerName "openbridge_c"/);
+  assert.match(seen.prompt,/"name":"lookup"/);
+  assert.doesNotMatch(seen.prompt,/Do not use tools/);
 });
-test('Antigravity rejects tool calls to unknown functions and non-object structured output', async t => {
+test('Antigravity refuses calls outside the bridge, unknown functions and non-object structured output', async t => {
   const tools=toolMode({tools:[{type:'function',function:{name:'lookup',parameters:{type:'object'}}}]});
-  await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgy(t,'{"content":null,"tool_calls":[{"name":"other","arguments":{}}]}'),tools}),/valid function call/);
+  await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgyTools(t,[['openbridge_c','other',{}]]).file,tools}),/did not offer/);
+  await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgyTools(t,[['chrome-devtools','click',{}]]).file,tools}),/attempted a tool action/);
+  await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgyTools(t,[['other-tool','x',{}]]).file,tools}),/attempted a tool action/);
+  // Without the permission rule agy refuses the call before the server sees it: an error, never the shortened copy.
+  await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgyTools(t,[['openbridge_c','lookup',{q:'x'}]],[],{denied:true}).file,tools}),/turn on function calling/);
   await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgy(t,'[1]'),responseFormat:{type:'json_object'}}),/valid structured output/);
   const emitted=[];
   assert.equal(await runAntigravity([{role:'user',content:'hi'}],signal(),d=>emitted.push(d),{binary:fakeAgy(t,'{"a":1}'),responseFormat:{type:'json_object'}}),'{"a":1}');

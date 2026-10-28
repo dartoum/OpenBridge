@@ -336,6 +336,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             if let index = config.providers.firstIndex(where: { $0.id == id }) { change(&config.providers[index]) }
         }, onError: onError, onSuccess: onSuccess)
     }
+    // The Google page's function-calling switch; the bridge edits only its own rule and reports the new state.
+    func setAgyToolPermission(_ allowed: Bool, onResult: @escaping (String?) -> Void) {
+        request("/bridge/agy-tool-permission", method: "POST", body: jsonData(["allowed": allowed])) { result in
+            if case .failure(let error) = result { onResult(error.localizedDescription) } else { onResult(nil) }
+            self.poll()
+        }
+    }
     func updateModel(_ id: String, change: @escaping (inout ModelRecord) -> Void) {
         updateConfig { config in
             for p in config.providers.indices {

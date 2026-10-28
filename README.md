@@ -110,7 +110,7 @@ Legacy `claude-subscription`, `chatgpt-subscription`, `gemini-subscription` and
 ## Account routes and current limits
 
 Claude uses its existing account login with safe mode, no tools/MCP/skills or
-session persistence. Codex forces ChatGPT login, ignores user configuration,
+session persistence (requests with `tools`: see function calling below). Codex forces ChatGPT login, ignores user configuration,
 uses an empty read-only workspace and disables shell/apps/plugins/hooks/browser
 features. No API key fallback for subscription routes. Codex can emit its answer
 at completion rather than token by token. CLI history is serialized as text,
@@ -138,18 +138,36 @@ CLI providers accept plain text and arrays of text parts. Claude also accepts
 `response_format` with `text`, `json_object` or `json_schema`. JSON Schema uses
 the CLI’s `--json-schema` and `structured_output`; JSON-object mode checks the
 complete reply before delivery. Structured replies are buffered, including SSE.
-**Function calling on Claude is emulated.** With `tools` (and `tool_choice`,
-`parallel_tool_calls`, tool messages) the bridge gives Claude the function list,
-asks for a fixed JSON answer through `--json-schema`, and turns it into standard
-`tool_calls` with `finish_reason: tool_calls`. Your client runs the functions and
-sends the results back, as with an API provider; the bridge never executes them.
-Replies are buffered, so calls arrive whole in SSE rather than as argument
-fragments, and the response carries `X-OpenBridge-Tools: emulated`. It is a
-benchmark of the model following the JSON agreement, not native tool use, so
-quality and reliability can be lower than an API provider. `response_format`
-cannot be combined with tools. ChatGPT and Google do not support function calling
-here: they, and `n` or other options that would change the result, return HTTP 422
-with the provider and the unsupported options. Length and sampling options (`max_tokens`,
+**Function calling on CLI routes.** With `tools` (and `tool_choice`,
+`parallel_tool_calls`, tool messages) every CLI route gets your functions as
+real tools from a small MCP server the bridge starts for that request
+(`src/tool-mcp.mjs`). The model calls them as it would any tool; the bridge reads
+the calls from the CLI's event stream, stops the CLI before anything runs and
+returns standard `tool_calls` with `finish_reason: tool_calls`
+(`X-OpenBridge-Tools: mcp`). The MCP server executes nothing and refuses any call
+that reaches it; Codex and Antigravity already refuse it themselves, as nobody
+approves tool use in their non-interactive mode. Your client
+runs the functions and sends the results back, as with an API provider. Claude
+runs these requests without `--safe-mode` (which would also switch off this MCP
+server) but with no settings files, CLAUDE.md, auto-memory, built-in tools or
+other MCP servers; the bridge checks the CLI's init report and refuses to continue
+if it loaded anything else. Antigravity loads the server as a plugin from the
+request's own temporary folder (nothing is installed in your agy or Antigravity
+app configuration); since agy starts it only at the first call, the functions are
+also described in the prompt. agy only hands the full call to that server with
+permission: turn on **Function calling** on the Google page, which adds one rule,
+`mcp(openbridge_c/*)`, to `~/.gemini/antigravity-cli/settings.json` (the CLI, not
+the desktop app); turning it off removes it. Until then, tool requests on
+Antigravity return 422. agy caches tool schemas per server; the bridge
+removes its own entry after each request. Note that agy keeps its own record of
+CLI conversations in `~/.gemini/antigravity-cli/conversations`, including those
+from the bridge; Claude and Codex runs are not saved. Replies with tool
+calls are buffered, so calls arrive whole in SSE rather than as argument
+fragments. A call to an unknown function, a missing call under
+`tool_choice: required` or several calls with `parallel_tool_calls: false` are
+errors, never guessed. `response_format` cannot be combined with tools. `n` and
+other options that would change the result return HTTP 422 with the provider and
+the unsupported options. Length and sampling options (`max_tokens`,
 `max_completion_tokens`, `temperature`, `top_p`, penalties, `stop`, `seed`, `user`,
 `stream_options`) cannot be applied by a CLI: they are ignored, and the response
 carries `X-OpenBridge-Ignored` naming them, so a client can notice. The token
@@ -160,7 +178,10 @@ for their turn, then get 429 with Retry-After. 120-second timeout and cancellati
 `usage` their CLI reports (JSON always; SSE as a final chunk when
 `stream_options.include_usage` is true), mapped to Chat Completions fields. The
 CLIs count differently (Claude's input excludes cache, Codex's includes it) and
-an emulated tool call counts the added prompt; Antigravity gives no cache split.
+tool definitions count as prompt; Antigravity gives no cache split. A Claude
+reply with tool calls reports the usage of that model message; a Codex or
+Antigravity reply with tool calls has none, because those CLIs report usage only
+at the end of their turn, which the bridge cuts short.
 
 The app uses English labels and diagnostics, 14-point main text and 13-point
 secondary text. Results appear next to the control that caused them (a model's

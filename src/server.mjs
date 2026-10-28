@@ -7,6 +7,7 @@ import { runProvider, toolMode, strictSchemaProblem } from './providers.mjs';
 import { loadConfig, validateConfig, saveConfig, catalog, availableModels, resolveConfiguredModel, EFFORT_PATTERN } from './config.mjs';
 import { unsupportedKeyword } from './json-schema.mjs';
 import { discoverModels } from './model-discovery.mjs';
+import { agyToolPermission, setAgyToolPermission } from './agy-permission.mjs';
 
 const httpError = (status, message, headers) => Object.assign(Error(message), { status, headers });
 const CLI_OPTIONS = ['model', 'messages', 'stream', 'tools', 'tool_choice', 'reasoning_effort'];
@@ -43,8 +44,8 @@ export function validate(body) {
 // the result, such as function calling, is refused rather than dropped. Returns the ignored option names.
 function checkCliOptions(provider, body) {
   const allowed = new Set([...CLI_OPTIONS, ...IGNORED_ON_CLI]);
-  const supportsStructured = provider.type === 'claude' || provider.type === 'antigravity';
-  // Every CLI takes response_format; Claude and Antigravity also emulate function calling, Codex does not.
+  // Every CLI takes response_format; Claude, Codex and Antigravity also take function calling (as MCP tools).
+  const supportsTools = ['claude', 'codex', 'antigravity'].includes(provider.type);
   allowed.add('response_format');
   // Codex enforces the schema itself but only in OpenAI's strict form, and retries instead of failing on anything else.
   if (provider.type === 'codex' && body.response_format?.type === 'json_schema') {
@@ -56,15 +57,15 @@ function checkCliOptions(provider, body) {
     const problem = unsupportedKeyword(body.response_format.json_schema.schema);
     if (problem) throw httpError(422, `Antigravity validates the reply against the schema itself and cannot check this: ${problem}`);
   }
-  // Claude and Antigravity can emulate function calling (see toolMode); Codex cannot.
-  const emulated = supportsStructured && body.tools?.length > 0;
-  if (emulated) {
+  // Function calling goes through toolMode: real tools via the bridge's MCP server on every CLI.
+  const withTools = supportsTools && body.tools?.length > 0;
+  if (withTools) {
     allowed.add('parallel_tool_calls');
     if (!body.tools.every(tool => tool?.type === 'function' && /^[a-zA-Z0-9_-]{1,64}$/.test(tool.function?.name))) throw httpError(422, 'Only function tools with a simple name are supported');
     if (body.response_format && body.response_format.type !== 'text') throw httpError(422, 'response_format cannot be combined with tools on a CLI route');
   }
   const unsupported = Object.keys(body).filter(k => !allowed.has(k));
-  const functions = !emulated && (body.tools?.length || (body.tool_choice && body.tool_choice !== 'none') || body.messages.some(m => m.role === 'tool' || m.tool_calls));
+  const functions = !withTools && (body.tools?.length || (body.tool_choice && body.tool_choice !== 'none') || body.messages.some(m => m.role === 'tool' || m.tool_calls));
   if (unsupported.length || functions) throw httpError(422, `${provider.name} CLI does not support these options: ${unsupported.join(', ') || 'function calling'}. Use an OpenAI-compatible API provider for these features.`);
   // stream_options { include_usage } is honoured (a usage chunk); anything else in it is ignored.
   const honoured = name => name === 'stream_options' && Object.keys(body.stream_options || {}).every(k => k === 'include_usage');
@@ -169,7 +170,13 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
   const persist = next => { saveConfig(configPath, next); config = next; };
 
   const routes = {
-    'GET /bridge/status': () => ({ service:'openbridge', version:7, model:config.selectedModel, selectedModelID:config.selectedModel, activeModel, active, maintenance, models:catalog(config), config, checks, runtime:{ version:process.version, path:process.execPath }, credentialProviders:Object.keys(secrets), ...stats }),
+    'GET /bridge/status': () => ({ service:'openbridge', version:7, model:config.selectedModel, selectedModelID:config.selectedModel, activeModel, active, maintenance, models:catalog(config), config, checks, runtime:{ version:process.version, path:process.execPath }, credentialProviders:Object.keys(secrets), agyToolPermission:agyToolPermission(), ...stats }),
+    // The switch on the Google page: adds or removes OpenBridge's one rule in agy's CLI settings (src/agy-permission.mjs).
+    'POST /bridge/agy-tool-permission': async req => {
+      const body = await readJSON(req, 4096);
+      if (typeof body.allowed !== 'boolean') throw httpError(400, 'allowed must be boolean');
+      try { return setAgyToolPermission(body.allowed); } catch (e) { throw httpError(409, e.message); }
+    },
     'POST /bridge/maintenance': async req => {
       const body = await readJSON(req, 4096);
       if (typeof body.enabled !== 'boolean') throw httpError(400, 'enabled must be boolean');
@@ -231,10 +238,14 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
         const ignored = checkCliOptions(provider, body);
         if (ignored.length) extraHeaders['X-OpenBridge-Ignored'] = ignored.join(',');
         effort = cliEffort(spec, body.reasoning_effort);
-        if (provider.type === 'claude' || provider.type === 'antigravity') {
+        {
           try { tools = toolMode({ tools:body.tools, toolChoice:body.tool_choice, parallelToolCalls:body.parallel_tool_calls }); }
           catch (e) { throw httpError(422, e.message); }
-          if (tools) extraHeaders['X-OpenBridge-Tools'] = 'emulated';
+          // Every CLI calls the functions as real tools of the bridge's capture-only MCP server; the client runs them.
+          if (tools) extraHeaders['X-OpenBridge-Tools'] = 'mcp';
+          // agy hands the full call to the bridge only with the user's permission (Google page); never run it without.
+          if (tools && provider.type === 'antigravity' && agyToolPermission().allowed !== true)
+            throw httpError(422, 'Function calling on Antigravity is off: turn it on on the Google page in OpenBridge (it adds one permission rule for OpenBridge’s tools to the Antigravity CLI settings)');
         }
         body.messages = body.messages.map(m => ({ role:m.role === 'developer' ? 'system' : m.role, content:Array.isArray(m.content) ? m.content.map(p => p.text).join('') : m.content,
           ...(m.tool_calls ? { tool_calls:m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id:m.tool_call_id } : {}) }));
@@ -274,7 +285,7 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
           chunk({ content:delta });
         }, spec.id, { provider, modelSpec:spec, options:body, effort, tools, onModel:value => { resolvedModel = value; }, onUsage:value => { usage = value; } });
         if (result && typeof result === 'object') {
-          // Emulated function calling: the answer is buffered, so tool calls arrive whole.
+          // Function calling on a CLI: the answer is buffered, so tool calls arrive whole.
           const calls = result.tool_calls.map(call => ({ id:`call_${randomUUID().replaceAll('-', '').slice(0, 24)}`, type:'function', function:{ name:call.name, arguments:JSON.stringify(call.arguments) } }));
           const finish = calls.length ? 'tool_calls' : 'stop';
           if (body.stream) {

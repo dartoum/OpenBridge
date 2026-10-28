@@ -58,6 +58,7 @@ struct BridgeSnapshot: Codable {
     var checks: [String: RequestCheck]
     var runtime: RuntimeRecord
     var credentialProviders: [String]
+    var agyToolPermission: ToolPermission?
     var requests: Int
     var succeeded: Int
     var failed: Int
@@ -67,6 +68,12 @@ struct BridgeSnapshot: Codable {
 struct DetailText: Identifiable {
     let id = UUID()
     let text: String
+}
+
+// OpenBridge's one rule in the Antigravity CLI settings; allowed is nil when those settings cannot be read.
+struct ToolPermission: Codable {
+    var allowed: Bool?
+    var error: String?
 }
 
 let secondaryFont = Font.system(size: 13)
@@ -265,6 +272,7 @@ struct ProviderDetail: View {
     @State private var showAdvanced = false
     @State private var changingKey = false
     @State private var search = ""
+    @State private var permissionError: String?
     @State private var newName = ""
     @State private var newID = ""
     @FocusState private var focus: Field?
@@ -356,6 +364,25 @@ struct ProviderDetail: View {
                     Button("Choose program…") { if let path = app.pickExecutable() { cliPath = path; commit(.cliPath) } }.disabled(!editable)
                 }
                 if let fieldError { Text(fieldError).font(secondaryFont).foregroundStyle(.red).textSelection(.enabled) }
+            }
+            if provider.type == "antigravity", let snapshot = app.snapshot {
+                Section {
+                    Toggle(isOn: Binding(get: { snapshot.agyToolPermission?.allowed == true }, set: { value in
+                        app.setAgyToolPermission(value) { permissionError = $0 }
+                    })) {
+                        Text("Let apps call functions")
+                    }
+                    .toggleStyle(.switch).accessibilityLabel("Let apps call functions")
+                    .disabled(!editable || snapshot.agyToolPermission?.allowed == nil)
+                    if let error = permissionError ?? snapshot.agyToolPermission?.error {
+                        Text(error).font(secondaryFont).foregroundStyle(.red).textSelection(.enabled)
+                    }
+                } header: {
+                    Text("Function calling")
+                } footer: {
+                    Text("Antigravity only hands a function call to OpenBridge with permission. This switch adds one rule, mcp(openbridge_c/*), to the Antigravity CLI settings (~/.gemini/antigravity-cli/settings.json, not the desktop app). It covers only OpenBridge’s own tool server, which runs nothing: your app runs the function. Turning it off removes the rule.")
+                        .font(secondaryFont).foregroundStyle(.secondary)
+                }
             }
             if app.snapshot != nil {
                 Section("Models") {

@@ -55,8 +55,8 @@ them off: keep the profile. The adapter additionally rejects any step other than
 prompt goes in on stdin (`--input-format stream-json`, message
 `{"event":"user","message":{"content":…}}`), not as an argument. Never pass
 `--json-schema`: without agy's own tools it loops on a missing `finish` tool.
-Tool calling and `json_object` are therefore prompt-based and validated by the
-bridge (tools labelled `X-OpenBridge-Tools: emulated`). `json_schema` puts the
+`json_object` is therefore prompt-based and validated by the bridge; tool calling
+uses a workspace plugin (see Protocol and UI). `json_schema` puts the
 schema in the prompt and src/json-schema.mjs validates the reply; a schema
 using a keyword that checker lacks is 422, never silently unchecked.
 
@@ -76,9 +76,39 @@ src/providers.mjs (`claudeUsage`, `codexUsage`, `antigravityUsage`); none when a
 field is missing, never an estimate. Upstream 429/400/404/408/413/422 keep their
 status (429 with Retry-After); 401/403/5xx stay 502, since 401 means the bridge key.
 Clients execute API functions; never execute them in the bridge. Function
-calling on CLI adapters (Claude and Antigravity) is emulated through --json-schema (toolMode in src/providers.mjs): always
-buffered, always labelled with X-OpenBridge-Tools: emulated, never described as
-native. ChatGPT stays 422 for tools but takes response_format: json_schema goes to
+calling on CLI adapters goes through toolMode in src/providers.mjs. Every CLI gets
+the functions as real tools from src/tool-mcp.mjs, a per-request MCP server that
+executes nothing and refuses every call; the bridge reads the calls from the CLI
+events and stops the CLI before they run (Claude: at stop_reason tool_use; Codex
+and agy, which report calls one by one and refuse them themselves (Codex: approval
+policy "never"; agy: no approver in print mode): when anything else arrives or
+after TOOL_SETTLE_MS). Labelled X-OpenBridge-Tools: mcp.
+Claude's --safe-mode also disables --mcp-config servers, so tool requests use
+--setting-sources '' plus CLAUDE_CODE_DISABLE_CLAUDE_MDS/AUTO_MEMORY, --tools '' and
+--strict-mcp-config instead, and fail closed when the init event lists any other
+tool or MCP server: keep that check. agy has no per-request MCP flag; it does load
+plugins from the workspace's `.agents/plugins/`, so the request's temp dir carries
+an `openbridge` plugin (server name `openbridge_c`) and the profile enables only
+that plugin. Never install anything into agy's global config or plugins (shared with
+the Antigravity desktop app). agy starts the server only at the first call, so the
+functions and their schemas also go in the prompt; any tool step other than
+call_mcp_tool on openbridge_c fails the request. agy shortens long arguments in its
+events (about 500 characters, then "…"), so the full call must come from the MCP
+server's capture file (calls.jsonl in the request dir). agy delivers the call only
+with the permission rule `mcp(openbridge_c/*)` in ~/.gemini/antigravity-cli/settings.json
+(CLI only; workspace-level settings were tried and ignored). src/agy-permission.mjs
+adds or removes exactly that rule, and only from the user's switch on the Google page
+(POST /bridge/agy-tool-permission); it keeps every other setting and never overwrites
+a file that does not parse. Without the rule a tool request on Antigravity is 422
+before agy runs; never fall back to the shortened event arguments. agy caches tool schemas in
+~/.gemini/antigravity-cli/mcp/openbridge_c; the adapter removes that directory after
+each tool request. agy CLI conversations themselves are stored by agy in
+~/.gemini/antigravity-cli/conversations (no flag to prevent it). Unknown functions,
+missing calls under tool_choice required and extra calls with parallel_tool_calls
+false are errors, never guesses. Tool replies are always buffered and never
+combined with response_format. Live checks (October 2026): Claude 2.1.310 and
+agy 1.4.9 returned parallel calls; Codex 0.164 returned the calls of one reply and
+may defer later ones to the next round. ChatGPT takes response_format: json_schema goes to
 `codex exec --output-schema` (enforced by Codex; schemas must follow OpenAI's strict
 rules, checked up front by `strictSchemaProblem` because Codex retries instead of failing),
 json_object is prompt-based and validated. CLI adapters normalize text arrays. Claude additionally maps response_format

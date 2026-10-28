@@ -33,7 +33,7 @@ test('native API preserves content arrays, generation options, tool cycles and f
  const stream=await(await post({...body,stream:true,stream_options:{include_usage:true}})).text();
  const frames=stream.split('\n').filter(l=>l.startsWith('data: ')&&!l.includes('[DONE]')).map(l=>JSON.parse(l.slice(6)));
  assert.equal(frames[0].choices[0].delta.tool_calls[0].function.name,'weather');assert.equal(frames[1].choices[0].finish_reason,'tool_calls');assert.equal(frames[2].usage.completion_tokens,12);assert.match(stream,/\[DONE\]/);
- const unsupported=await post({...body,model:'chatgpt/default'});assert.equal(unsupported.status,422);assert.match((await unsupported.json()).error.message,/CLI does not support these options/);
+ const unsupported=await post({...body,model:'chatgpt/default',n:2,response_format:undefined});assert.equal(unsupported.status,422);assert.match((await unsupported.json()).error.message,/CLI does not support these options/);
  const truncated=await(await post({...body,stream:true,messages:[{role:'user',content:'truncated'}]})).text();assert.match(truncated,/ended before/);assert.doesNotMatch(truncated,/data: \[DONE\]/);
  const status=await(await fetch(base+'/bridge/status',{headers:{Authorization:'Bearer test'}})).json();assert.equal(status.succeeded,3);assert.equal(status.failed,1);assert.equal(status.active,false);
 });

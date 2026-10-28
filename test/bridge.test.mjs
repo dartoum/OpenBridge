@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createBridge } from '../src/server.mjs';
 import { defaultConfig } from '../src/config.mjs';
+import { runCodex, toolMode } from '../src/providers.mjs';
 
 test('authenticated API, validation, streaming and upstream errors', async t => {
   const server = createBridge({ key: 'test', runner: async (messages, signal, emit) => {
@@ -200,7 +201,7 @@ test('buffered streaming replies send SSE keepalive comments while the CLI works
   const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, { method: 'POST', headers: { Authorization: 'Bearer test' }, body: JSON.stringify({ model: 'claude-subscription', stream: true, tools: [tool], messages: [{ role: 'user', content: 'x' }] }) });
   const text = await response.text();
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get('x-openbridge-tools'), 'emulated');
+  assert.equal(response.headers.get('x-openbridge-tools'), 'mcp');
   assert.ok((text.match(/: keepalive/g) || []).length >= 2);
   assert.match(text, /"tool_calls"/);
   assert.match(text, /\[DONE\]/);
@@ -239,13 +240,54 @@ test('CLI token usage reaches the client in JSON, and in SSE only when include_u
   assert.deepEqual(chunks.at(-1).usage, usage);
 });
 
-test('Codex accepts response_format but still refuses function calling', async t => {
-  const server = createBridge({ key:'test', runner: async () => '{"a":1}' });
+test('Codex accepts response_format and function calling', async t => {
+  let seen;
+  const server = createBridge({ key:'test', runner: async (m, s, emit, id, { tools }) => { seen = tools; return tools ? { content:null, tool_calls:[{ name:'f', arguments:{ a:1 } }] } : '{"a":1}'; } });
   await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
   const post = extra => fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, { method:'POST', headers:{ Authorization:'Bearer test' }, body:JSON.stringify({ model:'chatgpt/default', messages:[{ role:'user', content:'x' }], ...extra }) });
   assert.equal((await post({ response_format:{ type:'json_object' } })).status, 200);
   assert.equal((await post({ response_format:{ type:'json_schema', json_schema:{ name:'x', schema:{ type:'object', additionalProperties:false, required:[], properties:{} } } } })).status, 200);
-  assert.equal((await post({ tools:[{ type:'function', function:{ name:'f', parameters:{ type:'object' } } }] })).status, 422);
+  assert.equal(seen, null);
+  const tool = { type:'function', function:{ name:'f', parameters:{ type:'object', properties:{ a:{ type:'number' } } } } };
+  const called = await post({ tools:[tool] });
+  assert.equal(called.status, 200);
+  assert.equal(called.headers.get('x-openbridge-tools'), 'mcp');
+  assert.deepEqual(seen.names, ['f']);
+  assert.equal((await called.json()).choices[0].finish_reason, 'tool_calls');
+  assert.equal((await post({ tools:[tool], response_format:{ type:'json_object' } })).status, 422);
+  assert.equal((await post({ messages:[{ role:'tool', tool_call_id:'c', content:'r' }] })).status, 422);
+});
+
+test('Codex offers the functions through its MCP config and collects the calls of one reply', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'openbridge-codex-'));
+  t.after(() => rmSync(dir, { recursive:true, force:true }));
+  const tools = toolMode({ tools:[{ type:'function', function:{ name:'rect', description:'Draw', parameters:{ type:'object' } } }] });
+  const event = e => JSON.stringify(e);
+  const call = (id, tool, args, server = 'c') => [event({ type:'item.started', item:{ id, type:'mcp_tool_call', server, tool, arguments:args, status:'in_progress' } }),
+    event({ type:'item.completed', item:{ id, type:'mcp_tool_call', server, tool, arguments:args, status:'failed', error:{ message:'MCP tool call requires approval, but approval policy is never' } } })];
+  // Fake CLI: records its arguments and stdin, prints the given events, then (like the real one) goes on working.
+  const run = async (lines, extra = {}) => {
+    const bin = join(dir, 'codex');
+    writeFileSync(join(dir, 'events.jsonl'), lines.join('\n') + '\n');
+    writeFileSync(bin, `#!/usr/bin/env node\nconst fs=require('node:fs');fs.writeFileSync('${dir}/args.json',JSON.stringify(process.argv.slice(2)));let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{fs.writeFileSync('${dir}/prompt.txt',s);process.stdout.write(fs.readFileSync('${dir}/events.jsonl','utf8'));setInterval(()=>{},1000);});\n`, { mode:0o755 });
+    return runCodex([{ role:'user', content:'draw' }], AbortSignal.timeout(8000), () => {}, { binary:bin, tools, ...extra });
+  };
+  const started = Date.now();
+  const ok = await run([event({ type:'item.completed', item:{ type:'agent_message', text:'Drawing two.' } }), ...call('i1', 'rect', { w:1 }), ...call('i2', 'rect', { w:2 }), ...call('i3', 'rect', { w:2 }),
+    event({ type:'item.completed', item:{ type:'agent_message', text:'The tool failed.' } })]);
+  assert.deepEqual(ok, { content:'Drawing two.', tool_calls:[{ name:'rect', arguments:{ w:1 } }, { name:'rect', arguments:{ w:2 } }] });
+  assert.ok(Date.now() - started < 900, 'a following reply ends the collection at once');
+  const args = JSON.parse(readFileSync(join(dir, 'args.json'), 'utf8'));
+  assert.ok(args.includes('--ignore-user-config'));
+  assert.match(args.find(a => a.startsWith('mcp_servers.c.args=')), /tool-mcp\.mjs/);
+  const prompt = readFileSync(join(dir, 'prompt.txt'), 'utf8');
+  assert.doesNotMatch(prompt, /Do not use tools/);
+  assert.match(prompt, /Use your tools/);
+  // No further event: the calls are returned after the settle time.
+  assert.deepEqual(await run(call('i1', 'rect', { w:3 })), { content:null, tool_calls:[{ name:'rect', arguments:{ w:3 } }] });
+  await assert.rejects(run(call('i1', 'shell', {})), /did not offer/);
+  await assert.rejects(run(call('i1', 'rect', {}, 'other')), /outside the bridge/);
+  await assert.rejects(run([event({ type:'item.completed', item:{ type:'command_execution' } })]), /unsupported tool action/);
 });
 
 test('Codex refuses a non-strict json_schema at once, with the reason', async t => {
@@ -259,4 +301,41 @@ test('Codex refuses a non-strict json_schema at once, with the reason', async t 
   assert.equal(optional.status, 422); assert.match((await optional.json()).error.message, /missing: b/);
   assert.equal(ran, false);
   assert.equal((await post({ type:'object', additionalProperties:false, required:['a'], properties:{ a:{ type:'string' } } })).status, 200);
+});
+
+test('function calling on Antigravity needs the user-granted permission rule, which the bridge adds and removes alone', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'openbridge-agy-settings-'));
+  const settings = join(dir, 'settings.json');
+  process.env.AGY_SETTINGS_PATH = settings;
+  t.after(() => { delete process.env.AGY_SETTINGS_PATH; rmSync(dir, { recursive:true, force:true }); });
+  writeFileSync(settings, JSON.stringify({ model:'x', permissions:{ allow:['read_url(apple.com)'], deny:['mcp(*)'] }, trustedWorkspaces:['/a'] }));
+  let ran = 0;
+  const server = createBridge({ key:'test', runner: async () => { ran++; return { content:null, tool_calls:[{ name:'f', arguments:{} }] }; } });
+  await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`, headers = { Authorization:'Bearer test' };
+  const status = async () => (await (await fetch(base + '/bridge/status', { headers })).json()).agyToolPermission;
+  const grant = allowed => fetch(base + '/bridge/agy-tool-permission', { method:'POST', headers, body:JSON.stringify({ allowed }) });
+  const call = () => fetch(base + '/v1/chat/completions', { method:'POST', headers, body:JSON.stringify({ model:'google/gemini-3.8-flash-medium', messages:[{ role:'user', content:'x' }], tools:[{ type:'function', function:{ name:'f', parameters:{ type:'object' } } }] }) });
+  assert.deepEqual(await status(), { allowed:false });
+  const refused = await call();
+  assert.equal(refused.status, 422);
+  assert.match((await refused.json()).error.message, /turn it on on the Google page/);
+  assert.equal(ran, 0);
+  assert.deepEqual(await (await grant(true)).json(), { allowed:true });
+  await grant(true);
+  const after = JSON.parse(readFileSync(settings, 'utf8'));
+  assert.deepEqual(after, { model:'x', permissions:{ allow:['read_url(apple.com)', 'mcp(openbridge_c/*)'], deny:['mcp(*)'] }, trustedWorkspaces:['/a'] });
+  assert.equal((await call()).status, 200);
+  assert.equal(ran, 1);
+  assert.deepEqual(await (await grant(false)).json(), { allowed:false });
+  assert.deepEqual(JSON.parse(readFileSync(settings, 'utf8')).permissions.allow, ['read_url(apple.com)']);
+  // A settings file that does not parse is reported and never overwritten.
+  writeFileSync(settings, '{ broken');
+  assert.equal((await status()).allowed, null);
+  const blocked = await grant(true);
+  assert.equal(blocked.status, 409);
+  assert.match((await blocked.json()).error.message, /could not be read/);
+  assert.equal(readFileSync(settings, 'utf8'), '{ broken');
+  // Plain chat on Antigravity is unaffected by the switch.
+  assert.equal((await fetch(base + '/v1/chat/completions', { method:'POST', headers, body:JSON.stringify({ model:'google/gemini-3.8-flash-medium', messages:[{ role:'user', content:'x' }] }) })).status, 200);
 });
