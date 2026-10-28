@@ -3,7 +3,18 @@
 Native AppKit/SwiftUI macOS manager plus a standalone local text bridge using Node
 built-ins. Do not add an OpenCode plugin lifecycle or third-party framework
 without a concrete need. `scripts/build-menubar.sh` bundles the current Node
-runtime and server sources; macOS 14+, current host architecture.
+runtime and server sources into a clean bundle; macOS 14+, current host architecture.
+`scripts/package-release.sh` builds the downloadable app: universal (arm64 +
+x86_64, so it needs a universal Node), ad-hoc signed (never a development
+certificate, which would ship the developer's name and email), without
+`BridgeRoot` or other local paths, as .dmg and .zip. It is not notarized; the
+README tells users how to open it. MIT licensed.
+
+The README is for users: short, with screenshots in docs/images and the details in
+docs/REFERENCE.md. Keep both factual about what the app does today. Never present
+OpenBridge as a free or cheaper API, a way around usage limits, or something to
+share or resell; say that each vendor's terms apply and that the project is not
+affiliated with Anthropic, OpenAI or Google.
 
 ## Configuration and credentials
 
