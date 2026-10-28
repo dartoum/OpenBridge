@@ -370,17 +370,18 @@ struct ProviderDetail: View {
                     Toggle(isOn: Binding(get: { snapshot.agyToolPermission?.allowed == true }, set: { value in
                         app.setAgyToolPermission(value) { permissionError = $0 }
                     })) {
-                        Text("Let apps call functions")
+                        Text("Let apps use tools with Gemini")
                     }
-                    .toggleStyle(.switch).accessibilityLabel("Let apps call functions")
+                    .toggleStyle(.switch).accessibilityLabel("Let apps use tools with Gemini")
+                    .help("Adds mcp(openbridge_c/*) to ~/.gemini/antigravity-cli/settings.json. OpenBridge’s tool server runs nothing itself: your app runs the tool.")
                     .disabled(!editable || snapshot.agyToolPermission?.allowed == nil)
                     if let error = permissionError ?? snapshot.agyToolPermission?.error {
                         Text(error).font(secondaryFont).foregroundStyle(.red).textSelection(.enabled)
                     }
                 } header: {
-                    Text("Function calling")
+                    Text("Tools")
                 } footer: {
-                    Text("Antigravity only hands a function call to OpenBridge with permission. This switch adds one rule, mcp(openbridge_c/*), to the Antigravity CLI settings (~/.gemini/antigravity-cli/settings.json, not the desktop app). It covers only OpenBridge’s own tool server, which runs nothing: your app runs the function. Turning it off removes the rule.")
+                    Text("Needed for apps where Gemini takes actions, such as design or coding apps. OpenBridge adds one permission to the Antigravity command-line tool. Turning this off removes it.")
                         .font(secondaryFont).foregroundStyle(.secondary)
                 }
             }

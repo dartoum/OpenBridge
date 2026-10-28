@@ -382,7 +382,7 @@ export async function runAntigravity(messages, signal, emit, { model, binary = p
   // reaches the server. As on Codex, the calls of one reply are collected until anything else arrives or TOOL_SETTLE_MS.
   // agy shortens long arguments in its events (about 500 characters, then "…"), so the full call is taken from the
   // capture file the MCP server writes. That requires agy to deliver the call: the permission rule AGY_TOOL_PERMISSION
-  // in agy's CLI settings, which the user grants on the Google page (src/agy-permission.mjs; the server checks it).
+  // in agy's CLI settings, which the user grants on the Antigravity page (src/agy-permission.mjs; the server checks it).
   let workdir, settle, denied = false, captured, delivered = 0;
   const steps = new Set();
   const capturedCalls = () => {
@@ -445,7 +445,7 @@ export async function runAntigravity(messages, signal, emit, { model, binary = p
   const answer = rawResult;
   if (tools) {
     if (denied || delivered < steps.size) throw Object.assign(Error(denied
-      ? 'Antigravity refused to hand the function call to OpenBridge: turn on function calling on the Google page in OpenBridge'
+      ? 'Antigravity refused to pass the tool call to OpenBridge: turn on “Let apps use tools with Gemini” on the Antigravity page in OpenBridge'
       : 'Antigravity did not deliver every function call to OpenBridge'), { status:denied ? 422 : undefined });
     return checkedCalls(answer, captured || [], tools, 'Antigravity');
   }

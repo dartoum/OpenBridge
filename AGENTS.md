@@ -97,7 +97,7 @@ events (about 500 characters, then "…"), so the full call must come from the M
 server's capture file (calls.jsonl in the request dir). agy delivers the call only
 with the permission rule `mcp(openbridge_c/*)` in ~/.gemini/antigravity-cli/settings.json
 (CLI only; workspace-level settings were tried and ignored). src/agy-permission.mjs
-adds or removes exactly that rule, and only from the user's switch on the Google page
+adds or removes exactly that rule, and only from the user's switch on the Antigravity page
 (POST /bridge/agy-tool-permission); it keeps every other setting and never overwrites
 a file that does not parse. Without the rule a tool request on Antigravity is 422
 before agy runs; never fall back to the shortened event arguments. agy caches tool schemas in

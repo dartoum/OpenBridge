@@ -155,7 +155,7 @@ if it loaded anything else. Antigravity loads the server as a plugin from the
 request's own temporary folder (nothing is installed in your agy or Antigravity
 app configuration); since agy starts it only at the first call, the functions are
 also described in the prompt. agy only hands the full call to that server with
-permission: turn on **Function calling** on the Google page, which adds one rule,
+permission: turn on **Let apps use tools with Gemini** on the Antigravity page, which adds one rule,
 `mcp(openbridge_c/*)`, to `~/.gemini/antigravity-cli/settings.json` (the CLI, not
 the desktop app); turning it off removes it. Until then, tool requests on
 Antigravity return 422. agy caches tool schemas per server; the bridge

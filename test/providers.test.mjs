@@ -105,7 +105,7 @@ test('Antigravity refuses calls outside the bridge, unknown functions and non-ob
   await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgyTools(t,[['chrome-devtools','click',{}]]).file,tools}),/attempted a tool action/);
   await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgyTools(t,[['other-tool','x',{}]]).file,tools}),/attempted a tool action/);
   // Without the permission rule agy refuses the call before the server sees it: an error, never the shortened copy.
-  await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgyTools(t,[['openbridge_c','lookup',{q:'x'}]],[],{denied:true}).file,tools}),/turn on function calling/);
+  await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgyTools(t,[['openbridge_c','lookup',{q:'x'}]],[],{denied:true}).file,tools}),/Let apps use tools with Gemini/);
   await assert.rejects(runAntigravity([{role:'user',content:'hi'}],signal(),()=>{},{binary:fakeAgy(t,'[1]'),responseFormat:{type:'json_object'}}),/valid structured output/);
   const emitted=[];
   assert.equal(await runAntigravity([{role:'user',content:'hi'}],signal(),d=>emitted.push(d),{binary:fakeAgy(t,'{"a":1}'),responseFormat:{type:'json_object'}}),'{"a":1}');

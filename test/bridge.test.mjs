@@ -319,7 +319,7 @@ test('function calling on Antigravity needs the user-granted permission rule, wh
   assert.deepEqual(await status(), { allowed:false });
   const refused = await call();
   assert.equal(refused.status, 422);
-  assert.match((await refused.json()).error.message, /turn it on on the Google page/);
+  assert.match((await refused.json()).error.message, /Let apps use tools with Gemini/);
   assert.equal(ran, 0);
   assert.deepEqual(await (await grant(true)).json(), { allowed:true });
   await grant(true);

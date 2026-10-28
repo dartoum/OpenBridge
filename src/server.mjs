@@ -171,7 +171,7 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
 
   const routes = {
     'GET /bridge/status': () => ({ service:'openbridge', version:7, model:config.selectedModel, selectedModelID:config.selectedModel, activeModel, active, maintenance, models:catalog(config), config, checks, runtime:{ version:process.version, path:process.execPath }, credentialProviders:Object.keys(secrets), agyToolPermission:agyToolPermission(), ...stats }),
-    // The switch on the Google page: adds or removes OpenBridge's one rule in agy's CLI settings (src/agy-permission.mjs).
+    // The switch on the Antigravity page: adds or removes OpenBridge's one rule in agy's CLI settings (src/agy-permission.mjs).
     'POST /bridge/agy-tool-permission': async req => {
       const body = await readJSON(req, 4096);
       if (typeof body.allowed !== 'boolean') throw httpError(400, 'allowed must be boolean');
@@ -243,9 +243,9 @@ export function createBridge({ key, adminKey = key, runner = runProvider, timeou
           catch (e) { throw httpError(422, e.message); }
           // Every CLI calls the functions as real tools of the bridge's capture-only MCP server; the client runs them.
           if (tools) extraHeaders['X-OpenBridge-Tools'] = 'mcp';
-          // agy hands the full call to the bridge only with the user's permission (Google page); never run it without.
+          // agy hands the full call to the bridge only with the user's permission (Antigravity page); never run it without.
           if (tools && provider.type === 'antigravity' && agyToolPermission().allowed !== true)
-            throw httpError(422, 'Function calling on Antigravity is off: turn it on on the Google page in OpenBridge (it adds one permission rule for OpenBridge’s tools to the Antigravity CLI settings)');
+            throw httpError(422, 'Tools are off for Gemini: turn on “Let apps use tools with Gemini” on the Antigravity page in OpenBridge');
         }
         body.messages = body.messages.map(m => ({ role:m.role === 'developer' ? 'system' : m.role, content:Array.isArray(m.content) ? m.content.map(p => p.text).join('') : m.content,
           ...(m.tool_calls ? { tool_calls:m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id:m.tool_call_id } : {}) }));
