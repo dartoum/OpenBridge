@@ -89,27 +89,21 @@ struct ManagerView: View {
     @ObservedObject var app: AppDelegate
     @State private var selection: String? = "overview"
     @State private var addingSubscription = false
-    @State private var confirmingRemoval = false
+    @State private var sidebar = NavigationSplitViewVisibility.all
     var selectedProvider: ProviderRecord? { app.providers.first { $0.id == selection } }
+    func enabledModels(_ provider: ProviderRecord) -> Int { app.snapshot?.models.filter { $0.providerID == provider.id && $0.enabled }.count ?? 0 }
+    func sidebarSymbol(_ provider: ProviderRecord) -> String { ["claude": "sparkles", "codex": "curlybraces", "antigravity": "circle.hexagongrid"][provider.type] ?? "terminal" }
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $sidebar) {
             List(selection: $selection) {
-                HStack(spacing: 8) {
-                    Image(systemName: "network")
-                        .frame(width: 18, alignment: .center)
-                    Text("Bridge")
-                    Spacer()
-                }
+                Label("Bridge", systemImage: "point.3.connected.trianglepath.dotted")
                 .tag("overview")
 
                 Section("Subscriptions") {
                     ForEach(app.providers) { provider in
-                        HStack(spacing: 8) {
-                            Image(systemName: "terminal")
-                                .frame(width: 18, alignment: .center)
-                            Text(provider.name)
-                            Spacer()
-                            if !provider.enabled { Image(systemName: "pause.circle").foregroundStyle(.secondary).accessibilityLabel("Disabled") }
+                        Group {
+                            if provider.enabled { Label(provider.name, systemImage: sidebarSymbol(provider)).badge(enabledModels(provider)) }
+                            else { Label(provider.name, systemImage: sidebarSymbol(provider)).badge(Text("Off")) }
                         }
                         .tag(provider.id)
                         .contextMenu {
@@ -124,20 +118,16 @@ struct ManagerView: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 190, ideal: 220)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                VStack(spacing: 0) {
-                    Divider()
-                    HStack(spacing: 2) {
-                        Button { addingSubscription = true } label: { Image(systemName: "plus").frame(width: 24, height: 22) }
-                            .help("Add a subscription CLI").accessibilityLabel("Add subscription")
-                            .disabled(app.snapshot == nil || app.maintenanceRunning)
-                        Button { confirmingRemoval = true } label: { Image(systemName: "minus").frame(width: 24, height: 22) }
-                            .help(selectedProvider != nil ? "Remove the selected subscription" : "Select a subscription to remove")
-                            .accessibilityLabel("Remove subscription")
-                            .disabled(selectedProvider == nil || app.snapshot == nil || app.maintenanceRunning)
-                        Spacer()
-                    }.buttonStyle(.borderless).padding(.horizontal, 10).padding(.vertical, 6)
-                }.background(.bar)
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    Button { withAnimation { sidebar = sidebar == .detailOnly ? .all : .detailOnly } } label: { Label("Toggle Sidebar", systemImage: "sidebar.left") }
+                        .help("Show or hide the sidebar")
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button { addingSubscription = true } label: { Label("Add Subscription", systemImage: "plus") }
+                        .help("Add a subscription CLI")
+                        .disabled(app.snapshot == nil || app.maintenanceRunning)
+                }
             }
         } detail: {
             Group {
@@ -146,12 +136,10 @@ struct ManagerView: View {
                 } else { Overview(app: app, addingSubscription: $addingSubscription) }
             }
             .frame(minWidth: 460)
+            .navigationTitle(selectedProvider?.name ?? "Bridge")
+            .hiddenToolbarTitle()
         }
         .sheet(isPresented: $addingSubscription) { AddSubscriptionSheet(app: app, presented: $addingSubscription) }
-        .alert("Remove \(selectedProvider?.name ?? "subscription") from Bridge?", isPresented: $confirmingRemoval) {
-            Button("Remove", role: .destructive) { if let id = selectedProvider?.id { selection = "overview"; app.removeProvider(id) } }
-            Button("Cancel", role: .cancel) {}
-        } message: { Text("Its models disappear from the API. You can re-add it at any time via Add subscription…") }
         .onChange(of: app.requestedSelection) { _, id in if let id { selection = id; app.requestedSelection = nil } }
         .alert(app.issue?.title ?? "", isPresented: Binding(get: { app.issue != nil }, set: { if !$0 { app.issue = nil } }), presenting: app.issue) { issue in
             Button("OK") {}
@@ -163,7 +151,26 @@ struct ManagerView: View {
             }
         } message: { issue in Text(issue.message) }
         .font(.system(size: 14))
-        .navigationTitle("OpenBridge")
+    }
+}
+
+extension View {
+    // Pages carry their own large title; the window keeps its title for Mission Control. macOS 14 shows both.
+    @ViewBuilder func hiddenToolbarTitle() -> some View {
+        if #available(macOS 15.0, *) { toolbar(removing: .title) } else { self }
+    }
+}
+
+// The large title at the top of a page, as in the App Store and Reminders; the toolbar shows no title of its own.
+struct PageTitle: View {
+    let title: String
+    var modelCount: Int?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.largeTitle.bold()).foregroundStyle(.primary)
+            if let modelCount { Text(modelCount == 1 ? "1 model on" : "\(modelCount) models on").font(secondaryFont).foregroundStyle(.secondary) }
+        }
+        .textCase(nil).padding(.bottom, 10)
     }
 }
 
@@ -176,8 +183,8 @@ struct Overview: View {
                 HStack(spacing: 12) {
                     Circle().fill(app.statusColor).frame(width: 10, height: 10).accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Local Bridge").font(.headline)
-                        Text(app.message).font(secondaryFont).foregroundStyle(.secondary)
+                        Text(app.message).font(.title2.bold())
+                        Text("Local bridge").font(secondaryFont).foregroundStyle(.secondary)
                     }
                     Spacer()
                     // On while the bridge runs or is starting; an external server is not ours to stop.
@@ -192,6 +199,8 @@ struct Overview: View {
                     HStack { ProgressView().controlSize(.small); Text("Running \(snapshot.activeModel ?? "request")"); Spacer(); Button("Cancel") { app.cancel() } }
                 }
                 if app.snapshot != nil && app.child == nil { Text("This bridge runs outside the app. Stop it in its terminal.").font(secondaryFont).foregroundStyle(.secondary) }
+            } header: {
+                PageTitle(title: "Bridge", modelCount: app.snapshot?.models.filter(\.enabled).count)
             }
             if app.providers.isEmpty {
                 Section {
@@ -291,16 +300,11 @@ struct ProviderDetail: View {
     var body: some View {
         Form {
             Section {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(provider.name).font(.title2.bold())
-                        Text("Subscription CLI").foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Toggle("Enabled", isOn: Binding(get: { provider.enabled }, set: { value in app.updateProvider(provider.id) { $0.enabled = value } }))
-                        .labelsHidden().toggleStyle(.switch).disabled(!editable)
-                }
+                Toggle("Use with Bridge", isOn: Binding(get: { provider.enabled }, set: { value in app.updateProvider(provider.id) { $0.enabled = value } }))
+                    .toggleStyle(.switch).disabled(!editable)
                 if app.snapshot == nil { Text("Start the bridge to change settings and models.").font(secondaryFont).foregroundStyle(.secondary) }
+            } header: {
+                PageTitle(title: provider.name, modelCount: app.snapshot?.models.filter { $0.providerID == provider.id && $0.enabled }.count)
             }
             Section("Account") {
                 if installed {
@@ -308,9 +312,11 @@ struct ProviderDetail: View {
                     if let status { LabeledContent("Account", value: status.auth) }
                     if let detail = status?.detail, !detail.isEmpty { Text(detail).font(secondaryFont).foregroundStyle(.secondary) }
                     HStack {
-                        if status?.loggedIn != true { Button("Sign in…") { app.login(provider) } }
+                        if status != nil, status?.loggedIn != true { Button("Sign in…") { app.login(provider) } }
                         Button("Update CLI…") { updatingCLI = true }.disabled(app.maintenanceRunning || app.snapshot?.active == true)
                         Button("Choose program…") { if let path = app.pickExecutable() { cliPath = path; commitPath() } }.disabled(!editable)
+                        Spacer()
+                        Button("Remove…", role: .destructive) { confirmingRemoval = true }.disabled(!editable)
                     }
                 } else {
                     Label("\(cliName) is not installed", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
@@ -342,10 +348,6 @@ struct ProviderDetail: View {
             if app.snapshot != nil {
                 let list = app.modelList(provider, search: search)
                 Section {
-                    SearchField(text: $search, placeholder: "Search models…")
-                        .frame(height: 22)
-                        .padding(.vertical, 2)
-
                     ForEach(list.shown, id: \.model.id) { item in
                         ModelRow(app: app, provider: provider, model: item.model, isAlias: item.isAlias)
                     }
@@ -380,10 +382,15 @@ struct ProviderDetail: View {
             }
         }
         .formStyle(.grouped)
+        .searchable(text: $search, placement: .toolbar, prompt: "Search models")
         .onChange(of: provider) { _, new in
             cliPath = new.cliPath
         }
         .sheet(isPresented: $updatingCLI) { CLIMaintenanceSheet(app: app, provider: provider) }
+        .alert("Remove \(provider.name) from Bridge?", isPresented: $confirmingRemoval) {
+            Button("Remove", role: .destructive) { app.removeProvider(provider.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Its models disappear from the API. You can re-add it at any time via Add Subscription.") }
         .onAppear { app.refreshChecksIfStale() }
     }
 }
@@ -395,46 +402,6 @@ func displayName(_ model: ModelRecord, in provider: ProviderRecord) -> String {
     if name.hasPrefix("Claude ") { name.removeFirst("Claude ".count) }
     if name.hasSuffix(" (latest)") { name.removeLast(" (latest)".count) }
     return name
-}
-
-struct SearchField: NSViewRepresentable {
-    @Binding var text: String
-    var placeholder: String = "Search models…"
-
-    func makeNSView(context: Context) -> NSSearchField {
-        let field = NSSearchField()
-        field.placeholderString = placeholder
-        field.delegate = context.coordinator
-        field.target = context.coordinator
-        field.action = #selector(Coordinator.action(_:))
-        field.controlSize = .regular
-        field.font = NSFont.systemFont(ofSize: 13)
-        return field
-    }
-
-    func updateNSView(_ nsView: NSSearchField, context: Context) {
-        if nsView.stringValue != text {
-            nsView.stringValue = text
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
-    }
-
-    final class Coordinator: NSObject, NSSearchFieldDelegate {
-        @Binding var text: String
-        init(text: Binding<String>) {
-            _text = text
-        }
-        func controlTextDidChange(_ obj: Notification) {
-            guard let field = obj.object as? NSSearchField else { return }
-            text = field.stringValue
-        }
-        @objc func action(_ sender: NSSearchField) {
-            text = sender.stringValue
-        }
-    }
 }
 
 struct ModelRow: View {

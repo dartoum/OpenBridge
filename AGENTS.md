@@ -161,6 +161,11 @@ Thinking is chosen on the Bridge page only and remembered per model, limited to 
 (`efforts`), overridable per request with `reasoning_effort`. Never send a level
 the model did not report.
 
+The window follows Apple's own apps (App Store, Notes, Find My). A SwiftUI toolbar must exist:
+without one the sidebar stops below the title bar, so keep `sceneBridgingOptions` and
+`.fullSizeContentView`. Each page starts with a large `PageTitle`; the toolbar shows none.
+The sidebar toggle and + sit in the sidebar's toolbar; provider search is `.searchable`.
+
 The app is a regular Dock app while its window is open and a menu-bar-only app
 after the window closes (activation policy switches in openManager and on window
 close); the menu bar item must always offer Open manager. Drawn icon that

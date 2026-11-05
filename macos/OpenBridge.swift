@@ -161,11 +161,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @objc func openManager() {
         if window == nil {
             let controller = NSHostingController(rootView: ManagerView(app: self))
+            // Passes SwiftUI's title and toolbar on to this AppKit window. Without a toolbar the sidebar stops below the title bar.
+            controller.sceneBridgingOptions = .all
             let win = NSWindow(contentViewController: controller)
             win.title = "OpenBridge"
             win.setContentSize(NSSize(width: 960, height: 740))
             win.minSize = NSSize(width: 830, height: 620)
-            win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            // Full-size content lets the sidebar run to the top of the window, behind the traffic lights.
+            win.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            win.toolbarStyle = .unified
             win.isReleasedWhenClosed = false
             win.center(); window = win
             // Closing the window leaves only the menu bar item; the Dock icon returns when the window opens again.
