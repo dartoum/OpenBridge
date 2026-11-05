@@ -29,11 +29,11 @@ func bridgeIcon(busy: Bool) -> NSImage {
     image.isTemplate = true
     return image
 }
-// Dock icon: the same glyph on a rounded square, following the macOS icon grid (824 pt body in a 1024 pt canvas).
+// Dock icon: the same glyph on a graphite rounded square (not blue: the App Store icon is blue), following the macOS icon grid (824 pt body in a 1024 pt canvas).
 func appIcon() -> NSImage {
     NSImage(size: NSSize(width: 1024, height: 1024), flipped: false) { _ in
         let body = NSBezierPath(roundedRect: NSRect(x: 100, y: 100, width: 824, height: 824), xRadius: 185, yRadius: 185)
-        NSGradient(starting: NSColor(calibratedRed: 0.20, green: 0.45, blue: 0.95, alpha: 1), ending: NSColor(calibratedRed: 0.08, green: 0.20, blue: 0.55, alpha: 1))?.draw(in: body, angle: -90)
+        NSGradient(starting: NSColor(calibratedRed: 0.36, green: 0.38, blue: 0.42, alpha: 1), ending: NSColor(calibratedRed: 0.12, green: 0.13, blue: 0.16, alpha: 1))?.draw(in: body, angle: -90)
         let scale: CGFloat = 36
         let glyph = bridgePath(busy: false)
         var placement = AffineTransform(scale: scale)
