@@ -115,7 +115,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         NSApp.mainMenu = mainMenu; NSApp.windowsMenu = windowMenu
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.applicationIconImage = appIcon()
         buildMainMenu()
         // Sign-in and installs happen outside the app: look again whenever the app comes back to the front.
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
