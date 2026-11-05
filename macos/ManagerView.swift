@@ -661,50 +661,81 @@ struct CLIMaintenanceSheet: View {
     let provider: ProviderRecord
     @Environment(\.dismiss) private var dismiss
     @State private var started = false
+    @State private var showDetails = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let versionBefore: String
     let plan: Result<CLIMaintenancePlan, Error>
     init(app: AppDelegate, provider: ProviderRecord) {
         self.app = app; self.provider = provider
+        versionBefore = app.cliStatus[provider.id]?.version ?? ""
         plan = Result { try CLIMaintenancePlan.make(type: provider.type, path: provider.cliPath,
             installed: FileManager.default.isExecutableFile(atPath: provider.cliPath),
             resolvedPath: URL(fileURLWithPath: provider.cliPath).resolvingSymlinksInPath().path) }
     }
+    var versionAfter: String { app.cliStatus[provider.id]?.version ?? "" }
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Update \(provider.name) CLI").font(.title2.bold())
-                    if let version = app.cliStatus[provider.id]?.version, !version.isEmpty {
-                        LabeledContent("Installed version", value: version)
-                    }
-                    switch plan {
-                    case .success(let plan):
-                        LabeledContent("Installation method", value: plan.method)
-                        Text("Command").font(.headline)
-                        Text(plan.command).font(identifierFont).textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
-                        Text("Bridge executable after completion: \(plan.expectedPath)").font(secondaryFont).foregroundStyle(.secondary)
-                        Text("New bridge requests pause while this runs. No model choices or account logins are changed. \(app.snapshot == nil ? "Start the bridge afterward to fetch models." : "Models are fetched again after a successful update.")").foregroundStyle(.secondary)
-                        if app.snapshot?.active == true { Text("Wait for the active request to finish.").foregroundStyle(.orange) }
-                    case .failure(let error): Text(error.localizedDescription).foregroundStyle(.orange)
-                    }
-                    if started {
-                        if app.maintenanceRunning { ProgressView("Running CLI maintenance…") }
-                        Text(app.maintenanceOutput).font(identifierFont).textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
-            }
-            Divider()
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Update \(provider.name)").font(.title2.bold())
+            if !started { confirmation } else { progress }
             HStack {
                 Spacer()
-                Button(started ? "Close" : "Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(app.maintenanceRunning)
+                Button(started ? "Done" : "Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(app.maintenanceRunning)
                 if case .success(let plan) = plan, !started {
                     Button(plan.title) { started = true; app.maintainCLI(plan, providerID: provider.id) }
                         .keyboardShortcut(.defaultAction)
                         .disabled(app.maintenanceRunning || app.snapshot?.active == true)
                 }
-            }.padding(16)
-        }.frame(width: 640, height: 460)
-            .interactiveDismissDisabled(app.maintenanceRunning)
+            }
+        }
+        .padding(24).frame(width: 520).fixedSize(horizontal: false, vertical: true)
+        .interactiveDismissDisabled(app.maintenanceRunning)
+    }
+    // Before starting: what will run, and what it does to the bridge. Nothing the page behind the sheet already shows.
+    @ViewBuilder var confirmation: some View {
+        switch plan {
+        case .success(let plan):
+            VStack(alignment: .leading, spacing: 6) {
+                Text(plan.method == "Native self-updater" ? "Command" : "Command (\(plan.method))").font(secondaryFont).foregroundStyle(.secondary)
+                Text(plan.command).font(identifierFont).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10).background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                if plan.expectedPath != plan.executable {
+                    Text("OpenBridge keeps using \(plan.expectedPath).").font(secondaryFont).foregroundStyle(.secondary)
+                }
+            }
+            Text("Requests pause while this runs. \(app.snapshot == nil ? "Start the bridge afterwards to fetch models." : "Models are fetched again afterwards.")")
+            if app.snapshot?.active == true { Text("Wait for the active request to finish.").foregroundStyle(.orange) }
+        case .failure(let error): Text(error.localizedDescription).foregroundStyle(.orange)
+        }
+    }
+    // After starting: one status line that changes in place; the updater's own output stays behind Show details.
+    @ViewBuilder var progress: some View {
+        if app.maintenanceRunning || app.checking {
+            HStack(spacing: 10) { ProgressView().controlSize(.small); Text(app.maintenanceRunning ? "Updating \(provider.name)…" : "Checking the new version…") }
+        } else if app.maintenanceSucceeded {
+            Label(versionAfter.isEmpty || versionAfter == versionBefore ? "\(provider.name) is up to date\(versionAfter.isEmpty ? "" : " (\(versionAfter))")."
+                  : "Updated from \(versionBefore.isEmpty ? "the previous version" : versionBefore) to \(versionAfter).", systemImage: "checkmark.circle.fill")
+        } else {
+            Label("The update failed.", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        }
+        if !app.maintenanceRunning, !app.checking, !app.maintenanceNote.isEmpty { Text(app.maintenanceNote).foregroundStyle(.secondary) }
+        if !app.maintenanceRunning, !app.checking, !app.maintenanceOutput.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                // A DisclosureGroup on macOS only reacts to its chevron; a button makes the whole label clickable.
+                Button { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { showDetails.toggle() } } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold))
+                            .rotationEffect(.degrees(showDetails ? 90 : 0))
+                        Text(showDetails ? "Hide details" : "Show details")
+                    }.contentShape(Rectangle())
+                }.buttonStyle(.plain).foregroundStyle(.secondary)
+                if showDetails {
+                    ScrollView {
+                        Text(app.maintenanceOutput).font(identifierFont).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxHeight: 180)
+                }
+            }
+        }
     }
 }

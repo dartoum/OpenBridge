@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var requestedSelection: String?
     @Published var maintenanceRunning = false
     @Published var maintenanceOutput = ""
+    @Published var maintenanceNote = ""
     @Published var maintenanceSucceeded = false
     var storedProviders: [ProviderRecord]?
     var providers: [ProviderRecord] {
@@ -520,7 +521,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
     func maintainCLI(_ plan: CLIMaintenancePlan, providerID: String) {
         guard !maintenanceRunning, snapshot?.active != true else { return }
-        maintenanceRunning = true; rebuildMenu(); maintenanceSucceeded = false; maintenanceOutput = "Running…"
+        maintenanceRunning = true; rebuildMenu(); maintenanceSucceeded = false; maintenanceOutput = ""; maintenanceNote = ""
         let locked = snapshot != nil
         let finish: (Int32, String) -> Void = { code, output in
             Task { @MainActor in
@@ -528,7 +529,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // Fetching needs the running bridge; without it the user starts the bridge and fetches by hand.
                 let fetching = success && locked
                 self.maintenanceSucceeded = success
-                self.maintenanceOutput = (success ? (fetching ? "Update completed. Fetching models…\n\n" : "Update completed. Start the bridge, then fetch models.\n\n") : "Failed (exit \(code)). Your existing configuration was kept.\n\n") + output
+                self.maintenanceOutput = output
+                self.maintenanceNote = success ? "" : "Exit code \(code). Your configuration was kept."
                 let resume: (Bool) -> Void = { resumed in
                     self.maintenanceRunning = false; self.rebuildMenu()
                     self.refreshChecks(); self.poll()
@@ -538,7 +540,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 if locked {
                     self.request("/bridge/maintenance", method: "POST", body: self.jsonData(["enabled": false])) { result in
                         if case .failure(let error) = result {
-                            self.maintenanceOutput += "\nCould not resume the bridge; restart it: " + error.localizedDescription
+                            self.maintenanceNote = "Requests are still paused. Restart the bridge or choose Resume requests. " + error.localizedDescription
                             resume(false)
                         } else { resume(true) }
                     }
@@ -553,7 +555,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             request("/bridge/maintenance", method: "POST", body: jsonData(["enabled": true])) { result in
                 switch result {
                 case .success: run()
-                case .failure(let error): self.maintenanceRunning = false; self.maintenanceOutput = error.localizedDescription; self.rebuildMenu()
+                case .failure(let error): self.maintenanceRunning = false; self.maintenanceNote = error.localizedDescription; self.rebuildMenu()
                 }
             }
         } else { run() }
