@@ -106,6 +106,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             editMenu.addItem(withTitle: title, action: Selector(action), keyEquivalent: key)
         }
         editItem.submenu = editMenu; mainMenu.addItem(editItem)
+        // The HIG asks for a View menu even when it holds only the sidebar and full screen.
+        let viewItem = NSMenuItem(); let viewMenu = NSMenu(title: "View")
+        let sidebar = viewMenu.addItem(withTitle: "Hide Sidebar", action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "s")
+        sidebar.keyEquivalentModifierMask = [.command, .control]
+        viewMenu.addItem(.separator())
+        let fullScreen = viewMenu.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+        fullScreen.keyEquivalentModifierMask = [.command, .control]
+        viewItem.submenu = viewMenu; mainMenu.addItem(viewItem)
         let windowItem = NSMenuItem(); let windowMenu = NSMenu(title: "Window")
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
@@ -116,6 +124,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         NSApp.mainMenu = mainMenu; NSApp.windowsMenu = windowMenu
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // One manager window: no automatic tab items in the View menu.
+        NSWindow.allowsAutomaticWindowTabbing = false
         buildMainMenu()
         // Sign-in and installs happen outside the app: look again whenever the app comes back to the front.
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
@@ -138,13 +148,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             entry.target = self; entry.isEnabled = enabled && action != nil; menu.addItem(entry)
         }
         add("OpenBridge · \(message)", nil)
-        add("Open manager…", #selector(openManager))
+        add("Open Manager", #selector(openManager))
         menu.addItem(.separator())
-        add("Start bridge", #selector(start), child == nil && snapshot == nil && !maintenanceRunning)
-        add("Stop bridge", #selector(stop), child != nil && !maintenanceRunning)
-        add("Cancel request", #selector(cancel), snapshot?.active == true)
+        add("Start Bridge", #selector(start), child == nil && snapshot == nil && !maintenanceRunning)
+        add("Stop Bridge", #selector(stop), child != nil && !maintenanceRunning)
+        add("Cancel Request", #selector(cancel), snapshot?.active == true)
         menu.addItem(.separator())
-        add("Copy connection settings", #selector(copyConfig), snapshot != nil)
+        add("Copy Connection Settings", #selector(copyConfig), snapshot != nil)
         if includeQuit { menu.addItem(.separator()); add("Quit OpenBridge", #selector(quit)) }
         return menu
     }
@@ -417,10 +427,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let modelMap = Dictionary(provider.models.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         var shown: [(model: ModelRecord, isAlias: Bool)] = [], hidden = 0
-        let long = query.isEmpty && entries.count > 40
+        let long = query.isEmpty && entries.filter({ !$0.alias }).count > 40
         let maxSearchItems = 50
 
-        for entry in entries {
+        // Family aliases follow the CLI and have no switch; they show as "Automatic" on the Bridge page only.
+        for entry in entries where !entry.alias {
             guard let model = modelMap[entry.id] else { continue }
             if !query.isEmpty {
                 let match = model.id.lowercased().contains(query) || model.name.lowercased().contains(query)

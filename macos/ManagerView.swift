@@ -90,6 +90,7 @@ struct ManagerView: View {
     @State private var selection: String? = "overview"
     @State private var addingSubscription = false
     @State private var sidebar = NavigationSplitViewVisibility.all
+    @State private var removal: ProviderRecord?
     var selectedProvider: ProviderRecord? { app.providers.first { $0.id == selection } }
     func enabledModels(_ provider: ProviderRecord) -> Int { app.snapshot?.models.filter { $0.providerID == provider.id && $0.enabled }.count ?? 0 }
     var body: some View {
@@ -108,10 +109,7 @@ struct ManagerView: View {
                         }
                         .tag(provider.id)
                         .contextMenu {
-                            Button(role: .destructive) {
-                                if selection == provider.id { selection = "overview" }
-                                app.removeProvider(provider.id)
-                            } label: {
+                            Button(role: .destructive) { removal = provider } label: {
                                 Label("Remove from Bridge", systemImage: "trash")
                             }
                         }
@@ -135,7 +133,7 @@ struct ManagerView: View {
         } detail: {
             Group {
                 if let selected = selection, let provider = app.providers.first(where: { $0.id == selected }) {
-                    ProviderDetail(app: app, provider: provider).id(provider.id)
+                    ProviderDetail(app: app, provider: provider, requestRemoval: { removal = provider }).id(provider.id)
                 } else { Overview(app: app, addingSubscription: $addingSubscription) }
             }
             .frame(minWidth: 460)
@@ -143,6 +141,11 @@ struct ManagerView: View {
             .hiddenToolbarTitle()
         }
         .sheet(isPresented: $addingSubscription) { AddSubscriptionSheet(app: app, presented: $addingSubscription) }
+        // The one place a provider is removed: its model choices go with it, so it always asks first.
+        .alert("Remove \(removal?.name ?? "subscription") from Bridge?", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), presenting: removal) { provider in
+            Button("Remove") { if selection == provider.id { selection = "overview" }; app.removeProvider(provider.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { provider in Text("Its model choices are deleted, so you set them up again if you add \(provider.name) back.") }
         .onChange(of: app.requestedSelection) { _, id in if let id { selection = id; app.requestedSelection = nil } }
         .alert(app.issue?.title ?? "", isPresented: Binding(get: { app.issue != nil }, set: { if !$0 { app.issue = nil } }), presenting: app.issue) { issue in
             Button("OK") {}
@@ -279,14 +282,14 @@ struct Overview: View {
 struct ProviderDetail: View {
     @ObservedObject var app: AppDelegate
     let provider: ProviderRecord
+    let requestRemoval: () -> Void
     @State private var cliPath: String
     @State private var fieldError: String?
     @State private var updatingCLI = false
-    @State private var confirmingRemoval = false
     @State private var search = ""
     @State private var permissionError: String?
-    init(app: AppDelegate, provider: ProviderRecord) {
-        self.app = app; self.provider = provider
+    init(app: AppDelegate, provider: ProviderRecord, requestRemoval: @escaping () -> Void) {
+        self.app = app; self.provider = provider; self.requestRemoval = requestRemoval
         _cliPath = State(initialValue: provider.cliPath)
     }
     var editable: Bool { app.snapshot != nil && !app.maintenanceRunning }
@@ -320,7 +323,7 @@ struct ProviderDetail: View {
                         Button("Update CLI…") { updatingCLI = true }.disabled(app.maintenanceRunning || app.snapshot?.active == true)
                         Button("Choose program…") { if let path = app.pickExecutable() { cliPath = path; commitPath() } }.disabled(!editable)
                         Spacer()
-                        Button("Remove…", role: .destructive) { confirmingRemoval = true }.disabled(!editable)
+                        Button("Remove…", role: .destructive) { requestRemoval() }.disabled(!editable)
                     }
                 } else {
                     Label("\(cliName) is not installed", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
@@ -395,10 +398,6 @@ struct ProviderDetail: View {
             cliPath = new.cliPath
         }
         .sheet(isPresented: $updatingCLI) { CLIMaintenanceSheet(app: app, provider: provider) }
-        .alert("Remove \(provider.name) from Bridge?", isPresented: $confirmingRemoval) {
-            Button("Remove", role: .destructive) { app.removeProvider(provider.id) }
-            Button("Cancel", role: .cancel) {}
-        } message: { Text("Its models disappear from the API. You can re-add it at any time via Add Subscription.") }
         .onAppear { app.refreshChecksIfStale() }
     }
 }
@@ -574,7 +573,7 @@ struct AddSubscriptionSheet: View {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Add Subscription CLI").font(.headline)
-                    Text("Turn on the subscription tools you want to use with OpenBridge.").font(secondaryFont).foregroundStyle(.secondary)
+                    Text("Add the subscription tools you want to use with OpenBridge. Remove one from its own page.").font(secondaryFont).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if scanning { ProgressView().controlSize(.small) }
@@ -598,13 +597,8 @@ struct AddSubscriptionSheet: View {
                             }
                             Spacer()
                             if candidate.status.installed {
-                                Toggle(candidate.name, isOn: Binding(
-                                    get: { isAdded },
-                                    set: { add in
-                                        if add { app.addSubscription(candidate) { addError = $0 } } else { app.removeProvider(candidate.id) }
-                                    }
-                                ))
-                                .labelsHidden().toggleStyle(.switch)
+                                if isAdded { Label("Added", systemImage: "checkmark").foregroundStyle(.secondary) }
+                                else { Button("Add") { app.addSubscription(candidate) { addError = $0 } } }
                             } else {
                                 // Installed somewhere unusual: the path is only asked for when none is found.
                                 Button("Choose program…") {
