@@ -92,7 +92,6 @@ struct ManagerView: View {
     @State private var sidebar = NavigationSplitViewVisibility.all
     var selectedProvider: ProviderRecord? { app.providers.first { $0.id == selection } }
     func enabledModels(_ provider: ProviderRecord) -> Int { app.snapshot?.models.filter { $0.providerID == provider.id && $0.enabled }.count ?? 0 }
-    func sidebarSymbol(_ provider: ProviderRecord) -> String { ["claude": "sparkles", "codex": "curlybraces", "antigravity": "circle.hexagongrid"][provider.type] ?? "terminal" }
     var body: some View {
         NavigationSplitView(columnVisibility: $sidebar) {
             List(selection: $selection) {
@@ -101,9 +100,11 @@ struct ManagerView: View {
 
                 Section("Subscriptions") {
                     ForEach(app.providers) { provider in
-                        Group {
-                            if provider.enabled { Label(provider.name, systemImage: sidebarSymbol(provider)).badge(enabledModels(provider)) }
-                            else { Label(provider.name, systemImage: sidebarSymbol(provider)).badge(Text("Off")) }
+                        // The system badge is smaller than the label; Notes shows counts at label size.
+                        HStack {
+                            Label(provider.name, systemImage: "terminal")
+                            Spacer()
+                            Text(provider.enabled ? String(enabledModels(provider)) : "Off").foregroundStyle(.secondary).monospacedDigit()
                         }
                         .tag(provider.id)
                         .contextMenu {
@@ -119,14 +120,16 @@ struct ManagerView: View {
             }
             .navigationSplitViewColumnWidth(min: 190, ideal: 220)
             .toolbar {
-                ToolbarItem(placement: .automatic) {
-                    Button { withAnimation { sidebar = sidebar == .detailOnly ? .all : .detailOnly } } label: { Label("Toggle Sidebar", systemImage: "sidebar.left") }
-                        .help("Show or hide the sidebar")
-                }
+                // Right-aligned against the sidebar's edge, as in Notes. Older systems keep them on the left.
+                if #available(macOS 26.0, *) { ToolbarSpacer(.flexible) }
                 ToolbarItem(placement: .automatic) {
                     Button { addingSubscription = true } label: { Label("Add Subscription", systemImage: "plus") }
                         .help("Add a subscription CLI")
                         .disabled(app.snapshot == nil || app.maintenanceRunning)
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button { withAnimation { sidebar = sidebar == .detailOnly ? .all : .detailOnly } } label: { Label("Toggle Sidebar", systemImage: "sidebar.left") }
+                        .help("Show or hide the sidebar")
                 }
             }
         } detail: {
@@ -170,7 +173,8 @@ struct PageTitle: View {
             Text(title).font(.largeTitle.bold()).foregroundStyle(.primary)
             if let modelCount { Text(modelCount == 1 ? "1 model on" : "\(modelCount) models on").font(secondaryFont).foregroundStyle(.secondary) }
         }
-        .textCase(nil).padding(.bottom, 10)
+        // A grouped form adds its own space above the first section header; pull the title up to sit just under the toolbar, as in Reminders.
+        .textCase(nil).padding(.top, -14).padding(.bottom, 10)
     }
 }
 
@@ -348,6 +352,11 @@ struct ProviderDetail: View {
             if app.snapshot != nil {
                 let list = app.modelList(provider, search: search)
                 Section {
+                    // Filters only this list, so it sits above it rather than in the window's toolbar.
+                    SearchField(text: $search, placeholder: "Search models")
+                        .frame(height: 22)
+                        .padding(.vertical, 2)
+
                     ForEach(list.shown, id: \.model.id) { item in
                         ModelRow(app: app, provider: provider, model: item.model, isAlias: item.isAlias)
                     }
@@ -382,7 +391,6 @@ struct ProviderDetail: View {
             }
         }
         .formStyle(.grouped)
-        .searchable(text: $search, placement: .toolbar, prompt: "Search models")
         .onChange(of: provider) { _, new in
             cliPath = new.cliPath
         }
@@ -402,6 +410,46 @@ func displayName(_ model: ModelRecord, in provider: ProviderRecord) -> String {
     if name.hasPrefix("Claude ") { name.removeFirst("Claude ".count) }
     if name.hasSuffix(" (latest)") { name.removeLast(" (latest)".count) }
     return name
+}
+
+struct SearchField: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder: String = "Search models…"
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField()
+        field.placeholderString = placeholder
+        field.delegate = context.coordinator
+        field.target = context.coordinator
+        field.action = #selector(Coordinator.action(_:))
+        field.controlSize = .regular
+        field.font = NSFont.systemFont(ofSize: 13)
+        return field
+    }
+
+    func updateNSView(_ nsView: NSSearchField, context: Context) {
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        @Binding var text: String
+        init(text: Binding<String>) {
+            _text = text
+        }
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSSearchField else { return }
+            text = field.stringValue
+        }
+        @objc func action(_ sender: NSSearchField) {
+            text = sender.stringValue
+        }
+    }
 }
 
 struct ModelRow: View {
@@ -542,8 +590,6 @@ struct AddSubscriptionSheet: View {
                     ForEach(candidates) { candidate in
                         let isAdded = app.providers.contains(where: { $0.id == candidate.id })
                         HStack(spacing: 12) {
-                            Image(systemName: "terminal")
-                                .foregroundStyle(isAdded ? Color.accentColor : Color.secondary)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(candidate.name).font(.system(size: 14, weight: .medium))
                                 Text(candidate.status.installed ? "\(candidate.status.auth) · \(candidate.path)" : "Not found on this Mac")
