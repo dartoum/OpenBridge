@@ -170,12 +170,8 @@ extension View {
 // The large title at the top of a page, as in the App Store and Reminders; the toolbar shows no title of its own.
 struct PageTitle: View {
     let title: String
-    var modelCount: Int?
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.largeTitle.bold()).foregroundStyle(.primary)
-            if let modelCount { Text(modelCount == 1 ? "1 model on" : "\(modelCount) models on").font(secondaryFont).foregroundStyle(.secondary) }
-        }
+        Text(title).font(.largeTitle.bold()).foregroundStyle(.primary)
         // A grouped form adds its own space above the first section header; pull the title up to sit just under the toolbar, as in Reminders.
         .textCase(nil).padding(.top, -14).padding(.bottom, 10)
     }
@@ -189,10 +185,7 @@ struct Overview: View {
             Section {
                 HStack(spacing: 12) {
                     Circle().fill(app.statusColor).frame(width: 10, height: 10).accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(app.message).font(.title2.bold())
-                        Text("Local bridge").font(secondaryFont).foregroundStyle(.secondary)
-                    }
+                    Text(app.message).font(.title2.bold())
                     Spacer()
                     // On while the bridge runs or is starting; an external server is not ours to stop.
                     Toggle("Bridge", isOn: Binding(
@@ -207,7 +200,7 @@ struct Overview: View {
                 }
                 if app.snapshot != nil && app.child == nil { Text("This bridge runs outside the app. Stop it in its terminal.").font(secondaryFont).foregroundStyle(.secondary) }
             } header: {
-                PageTitle(title: "Bridge", modelCount: app.snapshot?.models.filter(\.enabled).count)
+                PageTitle(title: "Bridge")
             }
             if app.providers.isEmpty {
                 Section {
@@ -226,12 +219,11 @@ struct Overview: View {
                     Button("Resume requests") { app.resumeBridgeAfterMaintenance() }
                 }
             }
-            Section("Connect from another app") {
+            Section {
                 LabeledContent("API type", value: "OpenAI Chat Completions")
                 LabeledContent("Base URL") { Text(app.endpoint + "/v1").textSelection(.enabled); CopyButton(title: "Copy") { app.copyURL() } }
                 LabeledContent("API key") { Text("Local bridge key").foregroundStyle(.secondary); CopyButton(title: "Copy") { app.copyKey() }.disabled(app.bridgeKey == nil) }
                 LabeledContent("All settings") { CopyButton(title: "Copy connection settings") { app.copyConfig() }.disabled(app.snapshot == nil) }
-                Text("For apps on this Mac. Requests use your local subscription CLIs.").font(secondaryFont).foregroundStyle(.secondary)
             }
             if let snapshot = app.snapshot {
                 Section("Requests since server start") {
@@ -241,9 +233,8 @@ struct Overview: View {
                 }
             }
             if let snapshot = app.snapshot {
-                Section("Models available to apps") {
-                    Text("One endpoint for every model that is switched on. An app picks a model by its ID. Thinking applies to every request for a model; an app can override it with reasoning_effort.").font(secondaryFont).foregroundStyle(.secondary)
-                    if snapshot.models.contains(where: \.enabled) == false {
+                if snapshot.models.contains(where: \.enabled) == false {
+                    Section("Models available to apps") {
                         Text("Switch on models on a subscription page; they appear here.").foregroundStyle(.secondary)
                     }
                 }
@@ -257,21 +248,6 @@ struct Overview: View {
                                 }
                             }
                         }
-                    }
-                }
-            }
-            Section("Installation") {
-                LabeledContent("Node.js", value: app.snapshot?.runtime.version ?? (FileManager.default.isExecutableFile(atPath: app.node) ? "Bundled" : "Missing"))
-                ForEach(app.providers) { provider in
-                    let status = app.cliStatus[provider.id]
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack {
-                            Text(provider.name)
-                            Spacer()
-                            Text(status == nil ? "Checking…" : status?.installed == true ? "Installed" : "Missing")
-                                .foregroundStyle(status?.installed == false ? Color.orange : .secondary)
-                        }
-                        if let status, status.installed { Text(status.auth).font(secondaryFont).foregroundStyle(.secondary) }
                     }
                 }
             }
@@ -311,7 +287,7 @@ struct ProviderDetail: View {
                     .toggleStyle(.switch).disabled(!editable)
                 if app.snapshot == nil { Text("Start the bridge to change settings and models.").font(secondaryFont).foregroundStyle(.secondary) }
             } header: {
-                PageTitle(title: provider.name, modelCount: app.snapshot?.models.filter { $0.providerID == provider.id && $0.enabled }.count)
+                PageTitle(title: provider.name)
             }
             Section("Account") {
                 if installed {
@@ -386,10 +362,6 @@ struct ProviderDetail: View {
                         .foregroundStyle(Color.accentColor)
                         .disabled(app.discovering != nil || !editable)
                     }
-                } footer: {
-                    if app.discoveryStatus[provider.id] == nil {
-                        Text("New models start off; turn on the ones apps may use.").font(secondaryFont).foregroundStyle(.secondary)
-                    }
                 }
             }
         }
@@ -399,29 +371,6 @@ struct ProviderDetail: View {
         }
         .sheet(isPresented: $updatingCLI) { CLIMaintenanceSheet(app: app, provider: provider) }
         .onAppear { app.refreshChecksIfStale() }
-        // AppKit asks for first responder before mouseDown reaches the field, so userAsked is still false on the
-        // first click: a mouse press on the field itself is the user's request, not automatic focus.
-        private func clickIsOnField(_ event: NSEvent?) -> Bool {
-            guard let event, event.type == .leftMouseDown, event.window === window else { return false }
-            return bounds.contains(convert(event.locationInWindow, from: nil))
-        }
-        // SwiftUI's hosting view overrides the cursor around embedded AppKit views, so the field's own
-        // cursor rect never shows. Set the I-beam over the text area ourselves (not over the icon or clear button).
-        private var cursorArea: NSTrackingArea?
-        override func updateTrackingAreas() {
-            super.updateTrackingAreas()
-            if let cursorArea { removeTrackingArea(cursorArea) }
-            let area = NSTrackingArea(rect: bounds, options: [.cursorUpdate, .mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
-            addTrackingArea(area)
-            cursorArea = area
-        }
-        private func updateCursor(for event: NSEvent) {
-            let point = convert(event.locationInWindow, from: nil)
-            let text = (cell as? NSSearchFieldCell)?.searchTextRect(forBounds: bounds) ?? bounds
-            (text.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set()
-        }
-        override func cursorUpdate(with event: NSEvent) { updateCursor(for: event) }
-        override func mouseMoved(with event: NSEvent) { updateCursor(for: event) }
     }
 }
 
@@ -450,6 +399,29 @@ struct SearchField: NSViewRepresentable {
             }
             return super.becomeFirstResponder()
         }
+        // AppKit asks for first responder before mouseDown reaches the field, so userAsked is still false on the
+        // first click: a mouse press on the field itself is the user's request, not automatic focus.
+        private func clickIsOnField(_ event: NSEvent?) -> Bool {
+            guard let event, event.type == .leftMouseDown, event.window === window else { return false }
+            return bounds.contains(convert(event.locationInWindow, from: nil))
+        }
+        // SwiftUI's hosting view overrides the cursor around embedded AppKit views, so the field's own
+        // cursor rect never shows. Set the I-beam over the text area ourselves (not over the icon or clear button).
+        private var cursorArea: NSTrackingArea?
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let cursorArea { removeTrackingArea(cursorArea) }
+            let area = NSTrackingArea(rect: bounds, options: [.cursorUpdate, .mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
+            addTrackingArea(area)
+            cursorArea = area
+        }
+        private func updateCursor(for event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            let text = (cell as? NSSearchFieldCell)?.searchTextRect(forBounds: bounds) ?? bounds
+            (text.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set()
+        }
+        override func cursorUpdate(with event: NSEvent) { updateCursor(for: event) }
+        override func mouseMoved(with event: NSEvent) { updateCursor(for: event) }
         // Escape clears the text first and leaves the field on the next press, as in Finder.
         override func cancelOperation(_ sender: Any?) {
             if stringValue.isEmpty { window?.makeFirstResponder(nil) } else { super.cancelOperation(sender) }
@@ -524,7 +496,8 @@ struct ModelRow: View {
             // The ID is a column, so every row lines up and can be scanned or copied.
             Text(model.id).font(identifierFont).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 .textSelection(.enabled).help(model.id).frame(maxWidth: .infinity, alignment: .leading)
-            CopyIconButton(value: model.id) { app.copy(model.id) }
+            // Extra space between the copy button and the switch, so a click on one does not hit the other.
+            CopyIconButton(value: model.id) { app.copy(model.id) }.padding(.trailing, 14)
             Toggle("Enabled", isOn: Binding(get: { model.enabled }, set: { value in app.updateModel(model.id) { $0.enabled = value } }))
                 .labelsHidden().toggleStyle(.switch).accessibilityLabel("Enable \(displayName(model, in: provider))")
                 .disabled(app.snapshot == nil || app.maintenanceRunning)
