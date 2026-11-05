@@ -3,7 +3,7 @@
 # universal app (Apple silicon and Intel), signed ad-hoc and without the checkout path, for others to download.
 set -eu
 cd "${0:A:h}/.."
-version="0.7.0"
+version="0.8.0"
 release="${OPENBRIDGE_RELEASE:-}"
 app_path="${OPENBRIDGE_APP:-build/OpenBridge.app}"
 # Start from an empty bundle so files removed from src/ never linger in it.
