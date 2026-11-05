@@ -419,12 +419,31 @@ struct SearchField: NSViewRepresentable {
     // (or Tab), so a field that was not asked for gives focus back to the window. Clicking and Tab still work.
     final class QuietSearchField: NSSearchField {
         private var userAsked = false
+        private var monitor: Any?
         override func mouseDown(with event: NSEvent) { userAsked = true; super.mouseDown(with: event) }
         override func becomeFirstResponder() -> Bool {
             if !userAsked, NSApp.currentEvent?.type != .keyDown { DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(nil) } }
             return super.becomeFirstResponder()
         }
-        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); userAsked = false }
+        // Escape clears the text first and leaves the field on the next press, as in Finder.
+        override func cancelOperation(_ sender: Any?) {
+            if stringValue.isEmpty { window?.makeFirstResponder(nil) } else { super.cancelOperation(sender) }
+        }
+        // Clicking anywhere else ends editing. Plain buttons and background do not take focus by themselves,
+        // so without this the field keeps the keyboard until you press Escape.
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            userAsked = false
+            if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                guard let self, let window = self.window, event.window === window, self.currentEditor() != nil,
+                      let hit = window.contentView?.hitTest(event.locationInWindow), !hit.isDescendant(of: self) else { return event }
+                window.makeFirstResponder(nil)
+                return event
+            }
+        }
+        deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
     }
 
     func makeNSView(context: Context) -> NSSearchField {
