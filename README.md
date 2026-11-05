@@ -12,7 +12,7 @@ Claude Code, Codex and Antigravity — into one local, OpenAI-compatible endpoin
 [Connect an app](#connect-an-app) ·
 [Reference](docs/REFERENCE.md)
 
-<img src="docs/images/bridge.jpg" width="720" alt="The OpenBridge window: the local bridge is running, with the base URL, a copy button for the key and the list of models apps can use.">
+<img src="docs/images/bridge.png" width="720" alt="The OpenBridge window: the local bridge is running, with the base URL, a copy button for the key and the list of models apps can use.">
 
 </div>
 
@@ -55,7 +55,7 @@ Claude Code, Codex and Antigravity — into one local, OpenAI-compatible endpoin
    settings** copies the base URL and the key; each model has its own copy button
    for its ID.
 
-<img src="docs/images/models.jpg" width="720" alt="A CLI page in OpenBridge: version and sign-in status, and a list of models with an ID column and an on/off switch per model.">
+<img src="docs/images/models.png" width="720" alt="A CLI page in OpenBridge: version and sign-in status, a search field, and a list of models with an ID column and an on/off switch per model.">
 
 ## Connect an app
 
@@ -92,7 +92,7 @@ Antigravity only passes full tool calls to OpenBridge with that permission; the
 switch adds one rule to the Antigravity command-line tool and removes it again
 when you turn it off.
 
-<img src="docs/images/gemini-tools.jpg" width="720" alt="The Antigravity page with the switch 'Let apps use tools with Gemini' and a one-line explanation below it.">
+<img src="docs/images/gemini-tools.png" width="720" alt="The Antigravity page with the switch 'Let apps use tools with Gemini' and a one-line explanation below it.">
 
 ## Good to know
 

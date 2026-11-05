@@ -19,12 +19,13 @@ accepts per CLI, and where OpenBridge keeps its state.
   The switch on the Bridge page stops and starts it.
 - **Dock and menu bar.** With its window open OpenBridge is a normal Dock app.
   Closing the window leaves only the menu bar icon (dimmed while stopped, with a dot
-  during a request); **Open manager…** brings the window back. Quitting stops the
+  during a request); **Open Manager** brings the window back. Quitting stops the
   app's own server; a server started elsewhere is left alone.
 - **Subscriptions.** The sidebar lists the CLIs in use. **+** scans this Mac for
   Claude Code, Codex and Antigravity and adds the ones you switch on; when a CLI is
-  not found in the usual places, **Choose program…** points to it. **−** removes a
-  subscription after a confirmation.
+  not found in the usual places, **Choose program…** points to it. **Remove…** on a
+  CLI page (or *Remove from Bridge* in the sidebar's context menu) removes a
+  subscription after a confirmation; its model choices are deleted with it.
 - **CLI pages.** Each shows the installed version and whether you are signed in.
   The app reads both itself, so they show while the bridge is stopped. **Sign in…**
   appears only when the CLI reports that nobody is signed in. Checks run when you
