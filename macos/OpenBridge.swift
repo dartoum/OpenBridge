@@ -106,11 +106,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             editMenu.addItem(withTitle: title, action: Selector(action), keyEquivalent: key)
         }
         editItem.submenu = editMenu; mainMenu.addItem(editItem)
-        // The HIG asks for a View menu even when it holds only the sidebar and full screen.
+        // The HIG asks for a View menu even when it holds only Enter Full Screen; the sidebar cannot be hidden here.
         let viewItem = NSMenuItem(); let viewMenu = NSMenu(title: "View")
-        let sidebar = viewMenu.addItem(withTitle: "Hide Sidebar", action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "s")
-        sidebar.keyEquivalentModifierMask = [.command, .control]
-        viewMenu.addItem(.separator())
         let fullScreen = viewMenu.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.command, .control]
         viewItem.submenu = viewMenu; mainMenu.addItem(viewItem)
@@ -168,6 +165,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         button.toolTip = "OpenBridge — \(message)"
         button.setAccessibilityLabel("OpenBridge, \(message)")
     }
+    static func keepSidebarVisible(_ controller: NSViewController) {
+        func splitController(_ vc: NSViewController) -> NSSplitViewController? {
+            if let split = vc as? NSSplitViewController { return split }
+            for child in vc.children { if let found = splitController(child) { return found } }
+            return nil
+        }
+        func splitView(_ view: NSView) -> NSSplitView? {
+            if let split = view as? NSSplitView { return split }
+            for sub in view.subviews { if let found = splitView(sub) { return found } }
+            return nil
+        }
+        let split = splitController(controller) ?? (splitView(controller.view)?.delegate as? NSSplitViewController)
+        // SwiftUI sets canCollapse back to true when it updates the split view, so keep it false and put the
+        // sidebar back if it still collapses.
+        sidebarObservers = (split?.splitViewItems ?? []).flatMap { item -> [NSKeyValueObservation] in
+            item.canCollapse = false
+            return [
+                item.observe(\.canCollapse, options: [.new]) { item, _ in if item.canCollapse { item.canCollapse = false } },
+                item.observe(\.isCollapsed, options: [.new]) { item, _ in
+                    if item.isCollapsed { DispatchQueue.main.async { item.animator().isCollapsed = false } }
+                }]
+        }
+    }
+    nonisolated(unsafe) static var sidebarObservers: [NSKeyValueObservation] = []
     @objc func openManager() {
         if window == nil {
             let controller = NSHostingController(rootView: ManagerView(app: self))
@@ -182,6 +203,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             win.toolbarStyle = .unified
             win.isReleasedWhenClosed = false
             win.center(); window = win
+            // The sidebar always stays: with no toggle, a collapsed one could not come back. SwiftUI builds its split
+            // view controller after this point, so look for it once the window has laid out.
+            DispatchQueue.main.async { [weak controller] in if let controller { Self.keepSidebarVisible(controller) } }
             // Closing the window leaves only the menu bar item; the Dock icon returns when the window opens again.
             NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: win, queue: .main) { _ in
                 Task { @MainActor in NSApp.setActivationPolicy(.accessory) }

@@ -89,12 +89,11 @@ struct ManagerView: View {
     @ObservedObject var app: AppDelegate
     @State private var selection: String? = "overview"
     @State private var addingSubscription = false
-    @State private var sidebar = NavigationSplitViewVisibility.all
     @State private var removal: ProviderRecord?
     var selectedProvider: ProviderRecord? { app.providers.first { $0.id == selection } }
     func enabledModels(_ provider: ProviderRecord) -> Int { app.snapshot?.models.filter { $0.providerID == provider.id && $0.enabled }.count ?? 0 }
     var body: some View {
-        NavigationSplitView(columnVisibility: $sidebar) {
+        NavigationSplitView {
             List(selection: $selection) {
                 Label("Bridge", systemImage: "point.3.connected.trianglepath.dotted")
                 .tag("overview")
@@ -116,18 +115,14 @@ struct ManagerView: View {
                     }
                 }
             }
-            .navigationSplitViewColumnWidth(min: 190, ideal: 220)
+            .navigationSplitViewColumnWidth(220) // one fixed width: the sidebar is neither resized nor hidden
             .toolbar {
-                // Right-aligned against the sidebar's edge, as in Notes. Older systems keep them on the left.
+                // Right-aligned against the sidebar's edge, as in Notes. Older systems keep it on the left.
                 if #available(macOS 26.0, *) { ToolbarSpacer(.flexible) }
                 ToolbarItem(placement: .automatic) {
                     Button { addingSubscription = true } label: { Label("Add Subscription", systemImage: "plus") }
                         .help("Add a subscription CLI")
                         .disabled(app.snapshot == nil || app.maintenanceRunning)
-                }
-                ToolbarItem(placement: .automatic) {
-                    Button { withAnimation { sidebar = sidebar == .detailOnly ? .all : .detailOnly } } label: { Label("Toggle Sidebar", systemImage: "sidebar.left") }
-                        .help("Show or hide the sidebar")
                 }
             }
         } detail: {
