@@ -399,6 +399,29 @@ struct ProviderDetail: View {
         }
         .sheet(isPresented: $updatingCLI) { CLIMaintenanceSheet(app: app, provider: provider) }
         .onAppear { app.refreshChecksIfStale() }
+        // AppKit asks for first responder before mouseDown reaches the field, so userAsked is still false on the
+        // first click: a mouse press on the field itself is the user's request, not automatic focus.
+        private func clickIsOnField(_ event: NSEvent?) -> Bool {
+            guard let event, event.type == .leftMouseDown, event.window === window else { return false }
+            return bounds.contains(convert(event.locationInWindow, from: nil))
+        }
+        // SwiftUI's hosting view overrides the cursor around embedded AppKit views, so the field's own
+        // cursor rect never shows. Set the I-beam over the text area ourselves (not over the icon or clear button).
+        private var cursorArea: NSTrackingArea?
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let cursorArea { removeTrackingArea(cursorArea) }
+            let area = NSTrackingArea(rect: bounds, options: [.cursorUpdate, .mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
+            addTrackingArea(area)
+            cursorArea = area
+        }
+        private func updateCursor(for event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            let text = (cell as? NSSearchFieldCell)?.searchTextRect(forBounds: bounds) ?? bounds
+            (text.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set()
+        }
+        override func cursorUpdate(with event: NSEvent) { updateCursor(for: event) }
+        override func mouseMoved(with event: NSEvent) { updateCursor(for: event) }
     }
 }
 
@@ -422,7 +445,9 @@ struct SearchField: NSViewRepresentable {
         private var monitor: Any?
         override func mouseDown(with event: NSEvent) { userAsked = true; super.mouseDown(with: event) }
         override func becomeFirstResponder() -> Bool {
-            if !userAsked, NSApp.currentEvent?.type != .keyDown { DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(nil) } }
+            if !userAsked, NSApp.currentEvent?.type != .keyDown, !clickIsOnField(NSApp.currentEvent) {
+                DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(nil) }
+            }
             return super.becomeFirstResponder()
         }
         // Escape clears the text first and leaves the field on the next press, as in Finder.
@@ -439,7 +464,8 @@ struct SearchField: NSViewRepresentable {
             monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
                 guard let self, let window = self.window, event.window === window, self.currentEditor() != nil,
                       let hit = window.contentView?.hitTest(event.locationInWindow), !hit.isDescendant(of: self) else { return event }
-                window.makeFirstResponder(nil)
+                // After the click is delivered: resigning mid-event can make SwiftUI drop the click (e.g. on a sidebar row).
+                DispatchQueue.main.async { [weak self] in if self?.currentEditor() != nil { self?.window?.makeFirstResponder(nil) } }
                 return event
             }
         }
