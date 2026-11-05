@@ -415,8 +415,20 @@ struct SearchField: NSViewRepresentable {
     @Binding var text: String
     var placeholder: String = "Search models…"
 
+    // AppKit gives the first field in the window the keyboard focus when a page appears. A filter must wait for a click
+    // (or Tab), so a field that was not asked for gives focus back to the window. Clicking and Tab still work.
+    final class QuietSearchField: NSSearchField {
+        private var userAsked = false
+        override func mouseDown(with event: NSEvent) { userAsked = true; super.mouseDown(with: event) }
+        override func becomeFirstResponder() -> Bool {
+            if !userAsked, NSApp.currentEvent?.type != .keyDown { DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(nil) } }
+            return super.becomeFirstResponder()
+        }
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); userAsked = false }
+    }
+
     func makeNSView(context: Context) -> NSSearchField {
-        let field = NSSearchField()
+        let field = QuietSearchField()
         field.placeholderString = placeholder
         field.delegate = context.coordinator
         field.target = context.coordinator
